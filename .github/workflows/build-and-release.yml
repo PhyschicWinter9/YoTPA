@@ -1,0 +1,88 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Extract version from tag (if tagged)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Update version in build.gradle.kts (if tagged)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          sed -i "s/version = \".*\"/version = \"${VERSION#v}\"/" build.gradle.kts
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Run tests
+        run: ./gradlew test
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: YoTPA-${{ github.sha }}
+          path: |
+            build/libs/yotpa-*.jar
+            !build/libs/*-original.jar
+          if-no-files-found: error
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            build/libs/yotpa-*.jar
+            !build/libs/*-original.jar
+          body: |
+            ## YoTPA ${{ env.VERSION }}
+            
+            ### Features
+            - Simple TPA (teleport request) system
+            - Countdown timer with title display
+            - Movement detection to cancel teleport
+            - Permission-based cooldowns and timeouts
+            - Sound effects for all actions
+            
+            ### Commands
+            - `/tpa <player>` - Request to teleport to another player
+            - `/tpahere <player>` - Request another player to teleport to you
+            - `/tpaccept` - Accept a teleport request
+            - `/tpadeny` - Deny a teleport request
+            - `/tpareload` - Reload the plugin configuration
+            
+            ### Requirements
+            - Paper 1.21.5 or later
+            - Java 21
+            
+            **Download the JAR file below and place it in your server's `plugins` folder.**
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

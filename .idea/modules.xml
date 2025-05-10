@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/modules/YoTPA.main.iml" filepath="$PROJECT_DIR$/.idea/modules/YoTPA.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/YoTPA.test.iml" filepath="$PROJECT_DIR$/.idea/modules/YoTPA.test.iml" />
     </modules>
   </component>
 </project>

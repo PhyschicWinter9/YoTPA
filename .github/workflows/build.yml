@@ -1,12 +1,10 @@
-name: Build
+name: Simple Build
 
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  release:
-    types: [created]
 
 jobs:
   build:
@@ -19,25 +17,19 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: gradle
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Build with Gradle (without wrapper)
+        uses: gradle/gradle-build-action@v3
+        with:
+          arguments: clean build shadowJar
 
-      - name: Build with Gradle
-        run: ./gradlew build
+      - name: List all files in build directory
+        run: find build -name "*.jar" -type f
 
-      - name: Upload JAR artifact
+      - name: Upload all JARs
         uses: actions/upload-artifact@v4
         with:
-          name: YoTPA-${{ github.sha }}
-          path: build/libs/yotpa-*.jar
-          if-no-files-found: error
-
-      - name: Upload to release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v1
-        with:
-          files: build/libs/yotpa-*.jar
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: YoTPA-build
+          path: |
+            build/**/*.jar
+          if-no-files-found: warn

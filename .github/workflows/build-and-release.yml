@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build YoTPA Plugin
 
 on:
   push:
@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: write
-  packages: read
 
 jobs:
   build:
@@ -29,28 +28,21 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Extract version from tag (if tagged)
-        if: startsWith(github.ref, 'refs/tags/')
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Update version in build.gradle.kts (if tagged)
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          sed -i "s/version = \".*\"/version = \"${VERSION#v}\"/" build.gradle.kts
-
       - name: Build with Gradle
-        run: ./gradlew build
+        run: ./gradlew clean build reobfJar
 
-      - name: Run tests
-        run: ./gradlew test
+      - name: List build output
+        run: |
+          echo "Contents of build/libs/:"
+          ls -la build/libs/
 
-      - name: Upload build artifacts
+      - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
         with:
           name: YoTPA-${{ github.sha }}
           path: |
+            build/libs/YoTPA-*.jar
             build/libs/yotpa-*.jar
-            !build/libs/*-original.jar
           if-no-files-found: error
 
       - name: Create Release
@@ -58,30 +50,25 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
+            build/libs/YoTPA-*.jar
             build/libs/yotpa-*.jar
-            !build/libs/*-original.jar
           body: |
-            ## YoTPA ${{ env.VERSION }}
+            ## YoTPA Plugin Release
             
-            ### Features
-            - Simple TPA (teleport request) system
-            - Countdown timer with title display
-            - Movement detection to cancel teleport
-            - Permission-based cooldowns and timeouts
-            - Sound effects for all actions
+            New release of YoTPA plugin for Paper 1.21.5+
             
-            ### Commands
+            **Download:** Grab the JAR file below and place it in your server's `plugins` folder.
+            
+            **Requirements:**
+            - Paper 1.21.5+
+            - Java 21
+            
+            **Commands:**
             - `/tpa <player>` - Request to teleport to another player
             - `/tpahere <player>` - Request another player to teleport to you
             - `/tpaccept` - Accept a teleport request
             - `/tpadeny` - Deny a teleport request
             - `/tpareload` - Reload the plugin configuration
-            
-            ### Requirements
-            - Paper 1.21.5 or later
-            - Java 21
-            
-            **Download the JAR file below and place it in your server's `plugins` folder.**
           draft: false
           prerelease: false
         env:

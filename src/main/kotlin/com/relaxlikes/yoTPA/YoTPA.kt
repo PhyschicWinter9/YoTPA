@@ -1,0 +1,469 @@
+package com.relaxlikes.yoTPA
+
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.TextComponent
+import net.kyori.adventure.text.format.NamedTextColor
+import net.kyori.adventure.text.minimessage.MiniMessage
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+import net.kyori.adventure.title.Title
+import org.bukkit.Bukkit
+import org.bukkit.Sound
+import org.bukkit.command.Command
+import org.bukkit.command.CommandSender
+import org.bukkit.entity.Player
+import org.bukkit.plugin.java.JavaPlugin
+import java.util.*
+import java.util.concurrent.ConcurrentHashMap
+import java.util.logging.Level
+
+class YoTPA : JavaPlugin() {
+
+    // Maps to store teleport requests and cooldowns
+    private val tpaRequests = ConcurrentHashMap<UUID, TpaRequest>()
+    private val cooldowns = ConcurrentHashMap<UUID, Long>()
+    private val teleportTasks = ConcurrentHashMap<UUID, Int>()
+
+    // Configuration values
+    private var requestTimeout = 60
+    private var requestCooldown = 30
+    private var teleportDelay = 5
+    private var serverName = "RELAX"
+
+    private var countdownSound = Sound.BLOCK_NOTE_BLOCK_PLING
+    private var successSound = Sound.ENTITY_ENDERMAN_TELEPORT
+    private var cancelSound = Sound.ENTITY_VILLAGER_NO
+    private var requestSound = Sound.ENTITY_EXPERIENCE_ORB_PICKUP
+
+    // Constants
+    private var prefix = Component.text("[").append(Component.text("YoTPA").color(NamedTextColor.GOLD)).append(Component.text("]")).append(Component.text(" "))
+
+
+
+    override fun onEnable() {
+        // Plugin startup logic
+        // Save default config if not present
+        saveDefaultConfig()
+        // Load configuration values
+        loadConfig()
+        getCommand("tpa")?.setExecutor(this)
+        getCommand("tpaccept")?.setExecutor(this)
+        getCommand("tpadeny")?.setExecutor(this)
+        getCommand("tpahere")?.setExecutor(this)
+        getCommand("tpareload")?.setExecutor(this)
+
+        // Register event listener
+        server.pluginManager.registerEvents(PlayerMoveListener(this), this)
+
+        // Start expiration checker task
+        startExpirationChecker()
+
+        logger.info("YoTPA plugin has been enabled for $serverName!")
+    }
+
+    override fun onDisable() {
+        // Plugin shutdown logic
+        teleportTasks.forEach { (_, taskId) ->
+            Bukkit.getScheduler().cancelTask(taskId)
+        }
+        teleportTasks.clear()
+        tpaRequests.clear()
+        cooldowns.clear()
+
+        logger.info("YoTPA plugin has been disabled!")
+    }
+
+    override fun onCommand(sender: CommandSender, command: Command, label: String, args: Array<out String>): Boolean {
+        if (sender !is Player) {
+            val message: TextComponent = Component.text("This command can only be used by players.")
+                .color(NamedTextColor.RED)
+            sender.sendMessage(prefix.append(message))
+            return true
+        }
+
+        when (command.name.lowercase()) {
+            "tpa" -> handleTpaCommand(sender, args)
+            "tpaccept" -> handleTpAcceptCommand(sender)
+            "tpadeny" -> handleTpDenyCommand(sender)
+            "tpahere" -> handleTpaHereCommand(sender, args)
+            "tpareload" -> handleReloadCommand(sender)
+            else -> return false
+        }
+
+        return true
+    }
+
+    private fun handleTpaCommand(player: Player, args: Array<out String>) {
+        if (args.isEmpty()) {
+            val messageTpaHelper = Component.text("Usage: /tpa <player>")
+                .color(NamedTextColor.GRAY)
+            player.sendMessage(prefix.append(messageTpaHelper))
+            return
+        }
+
+        val targetName = args[0]
+        val target = Bukkit.getPlayer(targetName)
+
+        if (target == null) {
+//             player-not-found: "&cPlayer &e%player% &cnot found or is offline."
+//            player.sendMessage(colorize(getMessage("prefix") + getMessage("player-not-found").replace("%player%", targetName)))
+            val messagePlayerNotFound = Component.text("Player")
+                .color(NamedTextColor.RED)
+                .append(Component.text(" $targetName "))
+                .color(NamedTextColor.YELLOW)
+                .append(Component.text("not found or is offline."))
+                .color(NamedTextColor.RED)
+            player.sendMessage(prefix.append(messagePlayerNotFound))
+            return
+        }
+
+        if (target.uniqueId == player.uniqueId) {
+//            self-teleport: "&cYou cannot teleport to yourself."
+//            player.sendMessage(colorize(getMessage("prefix") + getMessage("self-teleport")))
+            val messageSelfTeleport = Component.text("You cannot teleport to yourself.")
+                .color(NamedTextColor.RED)
+            player.sendMessage(prefix.append(messageSelfTeleport))
+            return
+        }
+
+        if (isOnCooldown(player) && !player.hasPermission("yotpa.bypass.cooldown")) {
+            val remainingCooldown = ((cooldowns[player.uniqueId]!! + (requestCooldown * 1000)) - System.currentTimeMillis()) / 1000
+//            request-cooldown: "&cYou need to wait &e%seconds% &cseconds before sending another request."
+//            player.sendMessage(colorize(getMessage("prefix") + getMessage("request-cooldown").replace("%seconds%", remainingCooldown.toString())))
+            val messageRequestCooldown = Component.text("You need to wait ")
+                .color(NamedTextColor.RED)
+                .append(Component.text("$remainingCooldown "))
+                .color(NamedTextColor.YELLOW)
+                .append(Component.text("seconds before sending another request."))
+                .color(NamedTextColor.RED)
+            player.sendMessage(prefix.append(messageRequestCooldown))
+            return
+        }
+
+        // Create a new TPA request
+        val request = TpaRequest(player.uniqueId, target.uniqueId, System.currentTimeMillis(), false)
+        tpaRequests[target.uniqueId] = request
+
+        // Set cooldown
+        if (!player.hasPermission("yotpa.bypass.cooldown")) {
+            cooldowns[player.uniqueId] = System.currentTimeMillis()
+        }
+
+        // Send messages to both players
+//        request-sent: "&aTeleport request sent to &e%player%&a."
+//        request-received: "&e%player% &ahas requested to teleport to you."
+//        player.sendMessage(colorize(getMessage("prefix") + getMessage("request-sent").replace("%player%", target.name)))
+//        target.sendMessage(colorize(getMessage("prefix") + getMessage("request-received").replace("%player%", player.name)))
+        val messageRequestSent = Component.text("Teleport request sent to ")
+            .color(NamedTextColor.GREEN)
+            .append(Component.text(target.name))
+            .color(NamedTextColor.YELLOW)
+            .append(Component.text("."))
+            .color(NamedTextColor.GREEN)
+        val messageRequestReceived = Component.text(target.name)
+            .color(NamedTextColor.YELLOW)
+            .append(Component.text(" has requested to teleport to you."))
+            .color(NamedTextColor.GREEN)
+
+
+        // Play sound for target
+        try {
+            target.playSound(target.location, requestSound, 1.0f, 1.0f)
+        } catch (e: Exception) {
+            logger.log(Level.WARNING, "Failed to play request sound", e)
+        }
+    }
+
+    private fun handleTpaHereCommand(player: Player, args: Array<out String>) {
+
+        if (args.isEmpty()) {
+//            player.sendMessage(colorize(getMessage("prefix") + "Usage: /tpahere <player>"))
+            val message = Component.text("Usage: /tpahere <player>")
+                .color(NamedTextColor.YELLOW)
+            player.sendMessage(prefix.append(message))
+        }
+
+        val targetName = args[0]
+        val target = Bukkit.getPlayer(targetName)
+
+        if (target == null) {
+            player.sendMessage(colorize(getMessage("prefix") + getMessage("player-not-found").replace("%player%", targetName)))
+            return
+        }
+
+        if (target.uniqueId == player.uniqueId) {
+            player.sendMessage(colorize(getMessage("prefix") + getMessage("self-teleport")))
+            return
+        }
+
+        if (isOnCooldown(player) && !player.hasPermission("yotpa.bypass.cooldown")) {
+            val remainingCooldown = ((cooldowns[player.uniqueId]!! + (requestCooldown * 1000)) - System.currentTimeMillis()) / 1000
+            player.sendMessage(colorize(getMessage("prefix") + getMessage("request-cooldown").replace("%seconds%", remainingCooldown.toString())))
+            return
+        }
+
+        // Create a new TPA here request
+        val request = TpaRequest(player.uniqueId, target.uniqueId, System.currentTimeMillis(), true)
+        tpaRequests[target.uniqueId] = request
+
+        // Set cooldown
+        if (!player.hasPermission("yotpa.bypass.cooldown")) {
+            cooldowns[player.uniqueId] = System.currentTimeMillis()
+        }
+
+        // Send messages to both players
+        player.sendMessage(colorize(getMessage("prefix") + getMessage("request-sent").replace("%player%", target.name)))
+        target.sendMessage(colorize(getMessage("prefix") + getMessage("request-here-received").replace("%player%", player.name)))
+
+        // Play sound for target
+        try {
+            target.playSound(target.location, requestSound, 1.0f, 1.0f)
+        } catch (e: Exception) {
+            logger.log(Level.WARNING, "Failed to play request sound", e)
+        }
+    }
+
+    private fun handleTpAcceptCommand(player: Player) {
+        val request = tpaRequests[player.uniqueId]
+
+        if (request == null) {
+            player.sendMessage(colorize(getMessage("prefix") + getMessage("request-no-pending")))
+            return
+        }
+
+        val requester = Bukkit.getPlayer(request.requesterUUID)
+
+        if (requester == null || !requester.isOnline) {
+            player.sendMessage(colorize(getMessage("prefix") + getMessage("player-not-found").replace("%player%", "requester")))
+            tpaRequests.remove(player.uniqueId)
+            return
+        }
+
+        // Remove the request
+        tpaRequests.remove(player.uniqueId)
+
+        // Determine who is teleporting to whom
+        val teleporter: Player
+        val destination: Player
+
+        if (request.isHereRequest) {
+            // For /tpahere, the target teleports to the requester
+            teleporter = player
+            destination = requester
+        } else {
+            // For /tpa, the requester teleports to the target
+            teleporter = requester
+            destination = player
+        }
+
+        // Send messages
+        player.sendMessage(colorize(getMessage("prefix") + getMessage("request-accepted").replace("%player%", requester.name)))
+        requester.sendMessage(colorize(getMessage("prefix") + player.name + " accepted your teleport request."))
+
+        // Start teleport countdown
+        startTeleportCountdown(teleporter, destination)
+    }
+
+    private fun handleTpDenyCommand(player: Player) {
+        val request = tpaRequests[player.uniqueId]
+
+        if (request == null) {
+            player.sendMessage(colorize(getMessage("prefix") + getMessage("request-no-pending")))
+            return
+        }
+
+        val requester = Bukkit.getPlayer(request.requesterUUID)
+
+        // Remove the request
+        tpaRequests.remove(player.uniqueId)
+
+        // Send messages
+        player.sendMessage(colorize(getMessage("prefix") + getMessage("request-denied").replace("%player%", requester?.name ?: "Unknown")))
+        requester?.sendMessage(colorize(getMessage("prefix") + player.name + " denied your teleport request."))
+
+        // Play denial sound
+        try {
+            player.playSound(player.location, cancelSound, 1.0f, 1.0f)
+            requester?.playSound(requester.location, cancelSound, 1.0f, 1.0f)
+        } catch (e: Exception) {
+            logger.log(Level.WARNING, "Failed to play cancel sound", e)
+        }
+    }
+
+    private fun handleReloadCommand(player: Player) {
+        if (!player.hasPermission("yotpa.reload")) {
+            player.sendMessage(colorize(getMessage("prefix") + "You don't have permission to reload the configuration."))
+            return
+        }
+
+        reloadConfig()
+        loadConfig()
+        player.sendMessage(colorize(getMessage("prefix") + getMessage("config-reloaded")))
+    }
+
+    fun startTeleportCountdown(teleporter: Player, destination: Player) {
+        val startTime = teleportDelay
+        val originalLocation = teleporter.location.clone()
+
+        // Cancel any existing teleport task for this player
+        cancelTeleport(teleporter.uniqueId)
+
+        val taskId = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
+            val remainingSeconds = startTime - (System.currentTimeMillis() - teleportDelay * 1000) / 1000
+
+            if (remainingSeconds <= 0) {
+                // Teleport the player
+                performTeleport(teleporter, destination)
+
+                // Cancel the task
+                cancelTeleport(teleporter.uniqueId)
+            } else {
+                // Send countdown message
+                teleporter.sendMessage(colorize(getMessage("prefix") +
+                        getMessage("teleporting-countdown").replace("%seconds%", remainingSeconds.toString())))
+
+                // Show title
+                if (config.getBoolean("titles.enabled", true)) {
+                    val title = config.getString("titles.title", "&aTeleporting in...")?.let { colorize(it) } ?: "Teleporting in..."
+                    val subtitle = config.getString("titles.subtitle", "&e%seconds% &aseconds")
+                        ?.replace("%seconds%", remainingSeconds.toString())
+                        ?.let { colorize(it) } ?: "$remainingSeconds seconds"
+                    val titleText: Component = Component.text(title)
+                    val subtitleText: Component = Component.text(subtitle)
+
+//                Timer
+                    val times = Title.Times.times(
+                        java.time.Duration.ofSeconds(0),
+                        java.time.Duration.ofSeconds(25),
+                        java.time.Duration.ofSeconds(10)
+                    )
+                    val titleObj = Title.title(
+                        titleText,
+                        subtitleText,
+                        times
+                    )
+                    teleporter.showTitle(titleObj)
+                }
+
+                // Play sound
+                try {
+                    teleporter.playSound(teleporter.location, countdownSound, 1.0f, 1.0f)
+                } catch (e: Exception) {
+                    logger.log(Level.WARNING, "Failed to play countdown sound", e)
+                }
+            }
+        }, 0L, 20L)
+
+        teleportTasks[teleporter.uniqueId] = taskId
+
+        // Store the player's original location to check for movement
+        teleporter.setMetadata("yotpa:original-location", FixedMetadataValue(this, originalLocation))
+    }
+
+    fun cancelTeleport(uuid: UUID) {
+        teleportTasks[uuid]?.let { taskId ->
+            Bukkit.getScheduler().cancelTask(taskId)
+            teleportTasks.remove(uuid)
+        }
+
+        val player = Bukkit.getPlayer(uuid)
+        player?.removeMetadata("yotpa:original-location", this)
+    }
+
+    fun cancelTeleportDueToMovement(player: Player) {
+        cancelTeleport(player.uniqueId)
+        player.sendMessage(colorize(getMessage("prefix") + getMessage("teleporting-cancelled")))
+
+        // Play cancel sound
+        try {
+            player.playSound(player.location, cancelSound, 1.0f, 1.0f)
+        } catch (e: Exception) {
+            logger.log(Level.WARNING, "Failed to play cancel sound", e)
+        }
+    }
+
+    private fun performTeleport(teleporter: Player, destination: Player) {
+        teleporter.teleport(destination)
+        teleporter.sendMessage(colorize(getMessage("prefix") + getMessage("teleporting-success").replace("%player%", destination.name)))
+
+        // Play success sound
+        try {
+            teleporter.playSound(teleporter.location, successSound, 1.0f, 1.0f)
+            destination.playSound(destination.location, successSound, 1.0f, 1.0f)
+        } catch (e: Exception) {
+            logger.log(Level.WARNING, "Failed to play success sound", e)
+        }
+    }
+
+    private fun startExpirationChecker() {
+        Bukkit.getScheduler().runTaskTimerAsynchronously(this, Runnable {
+            val currentTime = System.currentTimeMillis()
+            val expiredRequests = ArrayList<UUID>()
+
+            // Find expired requests
+            tpaRequests.forEach { (targetUuid, request) ->
+                if (currentTime - request.timestamp > requestTimeout * 1000 &&
+                    !Bukkit.getPlayer(request.requesterUUID)?.hasPermission("yotpa.bypass.timeout")!!) {
+                    expiredRequests.add(targetUuid)
+                }
+            }
+
+            // Remove expired requests
+            Bukkit.getScheduler().runTask(this, Runnable{
+                expiredRequests.forEach { targetUuid ->
+                    val request = tpaRequests[targetUuid]
+                    if (request != null) {
+                        val targetPlayer = Bukkit.getPlayer(targetUuid)
+                        val requesterPlayer = Bukkit.getPlayer(request.requesterUUID)
+
+                        tpaRequests.remove(targetUuid)
+
+                        targetPlayer?.sendMessage(colorize(getMessage("prefix") +
+                                getMessage("request-expired").replace("%player%", requesterPlayer?.name ?: "Unknown")))
+                        requesterPlayer?.sendMessage(colorize(getMessage("prefix") +
+                                "Your teleport request to " + (targetPlayer?.name ?: "Unknown") + " has expired."))
+                    }
+                }
+            })
+        }, 20L, 20L) // Check every second
+    }
+
+    private fun isOnCooldown(player: Player): Boolean {
+        val lastRequest = cooldowns[player.uniqueId] ?: return false
+        return System.currentTimeMillis() - lastRequest < requestCooldown * 1000
+    }
+
+    private fun loadConfig() {
+        reloadConfig()
+        requestTimeout = config.getInt("request-timeout", 60)
+        requestCooldown = config.getInt("request-cooldown", 30)
+        teleportDelay = config.getInt("teleport-delay", 5)
+        serverName = config.getString("server-name", "RELAX Vanilla SMP") ?: "RELAX Vanilla SMP"
+
+        // Load sounds
+        try {
+            countdownSound = Sound.BLOCK_NOTE_BLOCK_PLING
+            successSound = Sound.ENTITY_ENDERMAN_TELEPORT
+            cancelSound = Sound.ENTITY_VILLAGER_NO
+            requestSound = Sound.ENTITY_EXPERIENCE_ORB_PICKUP
+        } catch (e: Exception) {
+            logger.log(Level.WARNING, "Invalid sound name in config, using defaults", e)
+        }
+    }
+
+    private fun getMessage(key: String): String {
+        return config.getString("messages.$key", "&cMissing message: $key") ?: "&cMissing message: $key"
+    }
+
+    private fun colorize(message: String): String {
+        val component: Component = MiniMessage.miniMessage().deserialize(message)
+        return LegacyComponentSerializer.legacySection().serialize(component)
+    }
+
+    data class TpaRequest(
+        val requesterUUID: UUID,
+        val targetUUID: UUID,
+        val timestamp: Long,
+        val isHereRequest: Boolean
+    )
+}

@@ -1,0 +1,50 @@
+name: YoTPA
+version: '1.0'
+main: com.relaxlikes.yoTPA.YoTPA
+api-version: '1.21'
+authors: [physchicWinter9, relaxlikes]
+description: Simple TPA plugin for RELAX SMP
+website: relaxlikes.com
+commands:
+  tpa:
+    description: Request to teleport to another player
+    usage: /tpa <player>
+    permission: yotpa.tpa
+  tpaccept:
+    description: Accept a teleport request
+    usage: /tpaccept
+    permission: yotpa.tpaccept
+  tpadeny:
+    description: Deny a teleport request
+    usage: /tpadeny
+    permission: yotpa.tpadeny
+  tpahere:
+    description: Request a player to teleport to you
+    usage: /tpahere <player>
+    permission: yotpa.tpahere
+  tpareload:
+    description: Reload the YoTPA plugin configuration
+    usage: /tpareload
+    permission: yotpa.reload
+permissions:
+  yotpa.tpa:
+    description: Allows use of the tpa command
+    default: true
+  yotpa.tpaccept:
+    description: Allows accepting teleport requests
+    default: true
+  yotpa.tpadeny:
+    description: Allows denying teleport requests
+    default: true
+  yotpa.tpahere:
+    description: Allows requesting others to teleport to you
+    default: true
+  yotpa.reload:
+    description: Allows reloading the plugin configuration
+    default: op
+  yotpa.bypass.cooldown:
+    description: Allows bypassing teleport cooldowns
+    default: op
+  yotpa.bypass.timeout:
+    description: Allows bypassing teleport timeout
+    default: op

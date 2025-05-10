@@ -61,7 +61,10 @@ class YoTPA : JavaPlugin() {
         // Start expiration checker task
         startExpirationChecker()
 
-        logger.info("YoTPA plugin has been enabled for $serverName!")
+//        logger.info("YoTPA plugin has been enabled for $serverName!")
+        logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
+        logger.info("YoTPA Version: 1.0.0")
+        logger.info("YoTPA plugin has been enabled!")
     }
 
     override fun onDisable() {

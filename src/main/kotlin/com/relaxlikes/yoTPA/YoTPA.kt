@@ -500,7 +500,7 @@ class YoTPA : JavaPlugin() {
             logger.log(Level.WARNING, "Invalid sound name in config, using defaults", e)
         }
     }
-    
+
     data class TpaRequest(
         val requesterUUID: UUID,
         val targetUUID: UUID,

@@ -2,7 +2,7 @@
 # Plugin by RelaxLikes
 
 # Server name that appears in messages
-server-name: "RELAX"
+server-name: "RELAXLIKES"
 
 # Time in seconds before a teleport request expires
 request-timeout: 60
@@ -13,21 +13,3 @@ request-cooldown: 30
 # Time in seconds the player must wait (countdown) before teleporting
 teleport-delay: 5
 
-
-# Messages configuration
-messages:
-  prefix: "&8[&bYoTPA&8] &r"
-  request-sent: "&aTeleport request sent to &e%player%&a."
-  request-received: "&e%player% &ahas requested to teleport to you."
-  request-here-received: "&e%player% &ahas requested you to teleport to them."
-  request-accepted: "&aYou accepted &e%player%'s &ateleport request."
-  request-denied: "&cYou denied &e%player%'s &cteleport request."
-  request-expired: "&cTeleport request from &e%player% &chas expired."
-  request-no-pending: "&cYou have no pending teleport requests."
-  player-not-found: "&cPlayer &e%player% &cnot found or is offline."
-  self-teleport: "&cYou cannot teleport to yourself."
-  teleporting-countdown: "&aTeleporting in &e%seconds% &aseconds..."
-  teleporting-cancelled: "&cTeleportation cancelled due to movement."
-  teleporting-success: "&aTeleported to &e%player%&a."
-  request-cooldown: "&cYou need to wait &e%seconds% &cseconds before sending another request."
-  config-reloaded: "&aConfiguration reloaded successfully."

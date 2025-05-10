@@ -29,7 +29,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build with Gradle
-        run: ./gradlew clean build reobfJar
+        run: ./gradlew clean build
 
       - name: List build output
         run: |

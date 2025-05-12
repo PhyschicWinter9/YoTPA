@@ -1,5 +1,5 @@
 
-![Logo](https://dev-to-uploads.s3.amazonaws.com/uploads/articles/th5xamgrr6se0x5ro4g6.png)
+![Logo](https://media.relaxlikes.com/yotpa/yotpa.png)
 
 
 # YoTPA
@@ -155,7 +155,7 @@ Send a request to teleport to another player.
 /tpa Alex123    # Request to teleport to player named Alex123
 ```
 
-![TPA Command](https://s14.gifyu.com/images/bsMWQ.gif)
+![TPA Command](screenshot/tpav2.gif)
 
 **Notes:**
 - You cannot send a request to yourself
@@ -179,7 +179,7 @@ No parameters required - accepts the most recent teleport request.
 /tpaccept    # Accept the pending teleport request
 ```
 
-![TPAccept Command](https://s14.gifyu.com/images/bsMWi.gif)
+![TPAccept Command](screenshot/tpaacceptv2.gif)
 
 **Notes:**
 - Only works if you have a pending teleport request
@@ -205,7 +205,7 @@ No parameters required - denies the most recent teleport request.
 /tpadeny    # Deny the pending teleport request
 ```
 
-![TPADeny Command](https://s14.gifyu.com/images/bsMWj.gif)
+![TPADeny Command](screenshot/tpadenyv2.gif)
 
 **Notes:**
 - Only works if you have a pending teleport request
@@ -231,7 +231,7 @@ Request another player to teleport to your location.
 /tpahere Alex123    # Request Alex123 to teleport to you
 ```
 
-![TPAHere Command](https://s14.gifyu.com/images/bsMW6.gif)
+![TPAHere Command](screenshot/tpaherev2.gif)
 
 **Notes:**
 - You cannot send a request to yourself
@@ -256,7 +256,7 @@ No parameters required - reloads the configuration file.
 /tpareload    # Reload the plugin configuration
 ```
 
-![TPAReload Command](https://s14.gifyu.com/images/bsMWW.gif)
+![TPAReload Command](screenshot/tpareloadv2.gif)
 
 **Notes:**
 - Requires the `yotpa.reload` permission (default: op only)

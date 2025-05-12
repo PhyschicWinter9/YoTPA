@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
@@ -17,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for commit message analysis
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -28,8 +31,33 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Extract version from build.gradle.kts
+        id: extract_version
+        run: |
+          VERSION=$(grep -o 'version = "[^"]*"' build.gradle.kts | cut -d'"' -f2)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Current version: $VERSION"
+
       - name: Build with Gradle
         run: ./gradlew clean build
+
+      - name: Check commit message for release trigger
+        id: check_release
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') && (contains(github.event.head_commit.message, '[release]') || contains(github.event.head_commit.message, '[version]'))
+        run: |
+          echo "Release keyword found in commit message. Preparing for release."
+          echo "SHOULD_RELEASE=true" >> $GITHUB_ENV
+
+      - name: Create and push tag
+        if: env.SHOULD_RELEASE == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          TAG_NAME="v${{ env.VERSION }}"
+          echo "Creating tag $TAG_NAME"
+          git tag -a $TAG_NAME -m "Release $TAG_NAME"
+          git push origin $TAG_NAME
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
 
       - name: List build output
         run: |
@@ -39,24 +67,33 @@ jobs:
       - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
         with:
-          name: YoTPA-${{ github.sha }}
+          name: YoTPA-${{ env.VERSION }}-${{ github.sha }}
           path: |
             build/libs/YoTPA-*.jar
           if-no-files-found: error
 
-      - name: Get GitHub Ref
-        run:
-            echo "GITHUB_REF=${GITHUB_REF}" >> $GITHUB_ENV
-            echo "GITHUB_REF_NAME=${GITHUB_REF_NAME}" >> $GITHUB_ENV
-            echo "GITHUB_SHA=${GITHUB_SHA}" >> $GITHUB_ENV
-
       - name: Create Release
-        if: ${{startsWith(github.ref, 'refs/tags')}}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_NAME: ${{ github.ref_name }}
+        if: startsWith(github.ref, 'refs/tags/')
         uses: elgohr/Github-Release-Action@v5
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           title: Release ${{ github.ref_name }}
           tag: ${{ github.ref_name }}
           prerelease: false
+
+      - name: Find JAR file
+        if: startsWith(github.ref, 'refs/tags/')
+        id: find_jar
+        run: |
+          JAR_FILE=$(find build/libs -name "YoTPA-*.jar" | head -n 1)
+          echo "Found JAR file: $JAR_FILE"
+          echo "JAR_FILE=$JAR_FILE" >> $GITHUB_ENV
+
+      - name: Upload JAR to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: JasonEtco/upload-to-release@master
+        with:
+          args: ${{ env.JAR_FILE }} application/java-archive
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

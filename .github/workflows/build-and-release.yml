@@ -1,4 +1,4 @@
-name: Build YoTPA Plugin
+name: Build YoTPA Plugin & Release
 
 on:
   push:
@@ -42,34 +42,15 @@ jobs:
           name: YoTPA-${{ github.sha }}
           path: |
             build/libs/YoTPA-*.jar
-            build/libs/yotpa-*.jar
           if-no-files-found: error
 
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            build/libs/YoTPA-*.jar
-            build/libs/yotpa-*.jar
-          body: |
-            ## YoTPA Plugin Release
-            
-            New release of YoTPA plugin for Paper 1.21.5+
-            
-            **Download:** Grab the JAR file below and place it in your server's `plugins` folder.
-            
-            **Requirements:**
-            - Paper 1.21.5+
-            - Java 21
-            
-            **Commands:**
-            - `/tpa <player>` - Request to teleport to another player
-            - `/tpahere <player>` - Request another player to teleport to you
-            - `/tpaccept` - Accept a teleport request
-            - `/tpadeny` - Deny a teleport request
-            - `/tpareload` - Reload the plugin configuration
-          draft: false
-          prerelease: false
+        if: ${{startsWith(github.ref, 'refs/tags')}}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_NAME: ${{ github.ref_name }}
+        uses: elgohr/Github-Release-Action@v5
+        with:
+          title: Release ${{ github.ref_name }}
+          tag: ${{ github.ref_name }}
+          prerelease: false

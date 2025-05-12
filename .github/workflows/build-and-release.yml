@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   build:
@@ -64,7 +63,7 @@ jobs:
           echo "Contents of build/libs/:"
           ls -la build/libs/
 
-      - name: Upload JAR artifact
+      - name: Upload JAR artifact to workflow
         uses: actions/upload-artifact@v4
         with:
           name: YoTPA-${{ env.VERSION }}-${{ github.sha }}
@@ -72,28 +71,25 @@ jobs:
             build/libs/YoTPA-*.jar
           if-no-files-found: error
 
-      - name: Create Release
+      - name: Create Release and Upload Assets
         if: startsWith(github.ref, 'refs/tags/')
-        uses: elgohr/Github-Release-Action@v5
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        id: upload_release
+        uses: svenstaro/upload-release-action@v2
         with:
-          title: Release ${{ github.ref_name }}
-          tag: ${{ github.ref_name }}
-          prerelease: false
-
-      - name: Find JAR file
-        if: startsWith(github.ref, 'refs/tags/')
-        id: find_jar
-        run: |
-          JAR_FILE=$(find build/libs -name "YoTPA-*.jar" | head -n 1)
-          echo "Found JAR file: $JAR_FILE"
-          echo "JAR_FILE=$JAR_FILE" >> $GITHUB_ENV
-
-      - name: Upload JAR to Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: JasonEtco/upload-to-release@master
-        with:
-          args: ${{ env.JAR_FILE }} application/java-archive
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: build/libs/YoTPA-*.jar
+          tag: ${{ github.ref }}
+          file_glob: true
+          overwrite: true
+          make_latest: true
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            ## YoTPA Plugin Release ${{ github.ref_name }}
+            
+            Version: ${{ env.VERSION }}
+            
+            ### What's New
+            - Automated release from commit tagged with version in build.gradle.kts
+            
+            ### Installation
+            Download the JAR file and install it in your plugin directory.

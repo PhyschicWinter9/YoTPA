@@ -17,6 +17,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.logging.Level
+import org.bstats.bukkit.Metrics;
+import org.bstats.charts.DrilldownPie
+import org.bstats.charts.MultiLineChart
+import org.bstats.charts.SimplePie
+import java.util.concurrent.Callable
+import java.util.concurrent.atomic.AtomicInteger
 
 class YoTPA : JavaPlugin() {
 
@@ -81,6 +87,9 @@ class YoTPA : JavaPlugin() {
         )
     )
 
+    private val bStats = bStatsTPA(this)
+
+
     override fun onEnable() {
         // Initialize executor service
         executor = Executors.newScheduledThreadPool(
@@ -101,9 +110,15 @@ class YoTPA : JavaPlugin() {
         // Start maintenance tasks
         startMaintenanceTasks()
 
+        // Load BStats
+        bStats.initialize()
+
+        // Register event listener
+        server.pluginManager.registerEvents(PlayerMoveListener(this), this)
+
         // Log startup
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
-        logger.info("YoTPA Version: 1.0.0")
+        logger.info("YoTPA Version: 1.2.0")
         logger.info("YoTPA plugin has been enabled!")
     }
 
@@ -141,6 +156,7 @@ class YoTPA : JavaPlugin() {
             "tpadeny" -> handleTpDenyCommand(sender)
             "tpahere" -> handleTpaHereCommand(sender, args)
             "tpareload" -> handleReloadCommand(sender)
+            "tpastats" -> handleStatsCommand(sender)
             else -> return false
         }
 
@@ -182,6 +198,9 @@ class YoTPA : JavaPlugin() {
         // Send messages
         sendTpaRequestMessages(player, target)
         playSound(target, requestSound)
+
+        // Bstats request counter
+        bStats.incrementRequestSent()
     }
 
     private fun handleTpaHereCommand(player: Player, args: Array<out String>) {
@@ -219,6 +238,9 @@ class YoTPA : JavaPlugin() {
         // Send messages
         sendTpaHereRequestMessages(player, target)
         playSound(target, requestSound)
+
+        // Bstats request counter
+        bStats.incrementRequestSent()
     }
 
     private fun handleTpAcceptCommand(player: Player) {
@@ -248,6 +270,9 @@ class YoTPA : JavaPlugin() {
 
         // Start teleport countdown
         startTeleportCountdown(teleporter, destination)
+
+        // Bstats acceptance counter
+        bStats.incrementRequestAccepted()
     }
 
     private fun handleTpDenyCommand(player: Player) {
@@ -270,6 +295,9 @@ class YoTPA : JavaPlugin() {
         // Play cancel sounds
         playSound(player, cancelSound)
         requester?.let { playSound(it, cancelSound) }
+
+        // Bstats denial counter
+        bStats.incrementRequestDenied()
     }
 
     private fun handleReloadCommand(player: Player) {
@@ -414,6 +442,8 @@ class YoTPA : JavaPlugin() {
                     sendMessage(requester, Component.text("Your teleport request to ${getPlayerName(targetUuid)} has expired.", NamedTextColor.RED))
                 }
             }
+            // Increment expired counter when a request expires
+            bStats.incrementRequestExpired()
         }
     }
 
@@ -544,4 +574,49 @@ class YoTPA : JavaPlugin() {
             logger.log(Level.WARNING, "Failed to play sound: $sound", e)
         }
     }
+
+    private fun handleStatsCommand(player: Player) {
+        if (!player.hasPermission("yotpa.stats")) {
+            val message = Component.text("You don't have permission to view statistics.")
+                .color(NamedTextColor.RED)
+            player.sendMessage(prefix.append(message))
+            return
+        }
+
+        // Get stats from bStats class
+        val stats = bStats.getStatistics()
+        val acceptanceRate = bStats.getAcceptanceRate()
+
+        // Display statistics
+        player.sendMessage(Component.text("===== YoTPA Statistics =====").color(NamedTextColor.GOLD))
+
+        // All-time stats
+        val allTimeStats = stats["All-Time"] ?: emptyMap()
+        player.sendMessage(Component.text("All-Time Statistics:").color(NamedTextColor.AQUA))
+        player.sendMessage(Component.text("• Requests Sent: ").color(NamedTextColor.YELLOW)
+            .append(Component.text(allTimeStats["Sent"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Requests Accepted: ").color(NamedTextColor.GREEN)
+            .append(Component.text(allTimeStats["Accepted"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Requests Denied: ").color(NamedTextColor.RED)
+            .append(Component.text(allTimeStats["Denied"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Requests Expired: ").color(NamedTextColor.GRAY)
+            .append(Component.text(allTimeStats["Expired"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Acceptance Rate: ").color(NamedTextColor.GOLD)
+            .append(Component.text("$acceptanceRate%").color(NamedTextColor.WHITE)))
+
+        // Daily stats
+        val dailyStats = stats["Daily"] ?: emptyMap()
+        player.sendMessage(Component.text("Today's Statistics:").color(NamedTextColor.AQUA))
+        player.sendMessage(Component.text("• Requests Sent: ").color(NamedTextColor.YELLOW)
+            .append(Component.text(dailyStats["Sent"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Requests Accepted: ").color(NamedTextColor.GREEN)
+            .append(Component.text(dailyStats["Accepted"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Requests Denied: ").color(NamedTextColor.RED)
+            .append(Component.text(dailyStats["Denied"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Requests Expired: ").color(NamedTextColor.GRAY)
+            .append(Component.text(dailyStats["Expired"].toString()).color(NamedTextColor.WHITE)))
+    }
+
+
+
 }

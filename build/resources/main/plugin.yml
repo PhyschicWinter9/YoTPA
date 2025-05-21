@@ -1,5 +1,5 @@
 name: YoTPA
-version: '1.0'
+version: '1.2.0'
 main: com.relaxlikes.yoTPA.YoTPA
 api-version: '1.21'
 authors: [physchicWinter9, relaxlikes]
@@ -26,6 +26,10 @@ commands:
     description: Reload the YoTPA plugin configuration
     usage: /tpareload
     permission: yotpa.reload
+  tpastats:
+    description: View teleport request statistics
+    usage: /tpastats
+    permission: yotpa.stats
 permissions:
   yotpa.tpa:
     description: Allows use of the tpa command
@@ -41,6 +45,9 @@ permissions:
     default: true
   yotpa.reload:
     description: Allows reloading the plugin configuration
+    default: op
+  yotpa.stats:
+    description: Allows viewing teleport request statistics
     default: op
   yotpa.bypass.cooldown:
     description: Allows bypassing teleport cooldowns

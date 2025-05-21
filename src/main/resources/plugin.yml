@@ -1,5 +1,5 @@
 name: YoTPA
-version: '1.2.0'
+version: '1.2.1'
 main: com.relaxlikes.yoTPA.YoTPA
 api-version: '1.21'
 authors: [physchicWinter9, relaxlikes]

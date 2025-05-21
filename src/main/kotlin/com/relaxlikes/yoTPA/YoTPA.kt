@@ -17,12 +17,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.logging.Level
-import org.bstats.bukkit.Metrics;
-import org.bstats.charts.DrilldownPie
-import org.bstats.charts.MultiLineChart
-import org.bstats.charts.SimplePie
-import java.util.concurrent.Callable
-import java.util.concurrent.atomic.AtomicInteger
 
 class YoTPA : JavaPlugin() {
 

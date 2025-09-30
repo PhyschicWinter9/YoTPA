@@ -139,7 +139,7 @@ class YoTPA : JavaPlugin() {
         // Log startup info
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
-        logger.info("YoTPA Version: 1.3.0-Adaptive")
+        logger.info("YoTPA Version: 1.3.0")
         logger.info("Performance Mode: ${detectedMode.name}")
         logger.info("Available RAM: ${getAvailableMemoryMB()} MB")
         logger.info("Max RAM: ${getMaxMemoryMB()} MB")
@@ -574,7 +574,7 @@ class YoTPA : JavaPlugin() {
 
         player.sendMessage(Component.text("═══ YoTPA System Info ═══", NamedTextColor.GOLD))
         player.sendMessage(Component.text("Version: ", NamedTextColor.YELLOW)
-            .append(Component.text("1.3.0-Adaptive", NamedTextColor.WHITE)))
+            .append(Component.text("1.3.0", NamedTextColor.WHITE)))
         player.sendMessage(Component.text("Performance Mode: ", NamedTextColor.YELLOW)
             .append(Component.text(detectedMode.name, NamedTextColor.WHITE)))
         player.sendMessage(Component.text("Available RAM: ", NamedTextColor.YELLOW)

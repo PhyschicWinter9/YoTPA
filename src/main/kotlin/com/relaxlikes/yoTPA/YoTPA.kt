@@ -20,16 +20,14 @@ import java.util.logging.Level
 
 class YoTPA : JavaPlugin() {
 
-    // Use concurrent data structures for thread safety
+    // Thread-safe data structures
     private val tpaRequests = ConcurrentHashMap<UUID, TpaRequest>()
     private val cooldowns = ConcurrentHashMap<UUID, Long>()
     private val teleportTasks = ConcurrentHashMap<UUID, Int>()
     private val teleportData = ConcurrentHashMap<UUID, TeleportData>()
-
-    // Player name cache to avoid repeated lookups
     private val playerNameCache = ConcurrentHashMap<UUID, String>()
 
-    // Configuration values with atomic references for thread-safe access
+    // Configuration values with volatile for thread-safe access
     @Volatile private var requestTimeout = 60
     @Volatile private var requestCooldown = 30
     @Volatile private var teleportDelay = 5
@@ -41,23 +39,25 @@ class YoTPA : JavaPlugin() {
     @Volatile private var requestSound = Sound.ENTITY_EXPERIENCE_ORB_PICKUP
 
     // Cached components to avoid recreation
-    private val prefix = Component.text("[", NamedTextColor.GREEN, TextDecoration.BOLD)
-        .append(Component.text("YoTPA", NamedTextColor.AQUA, TextDecoration.BOLD))
-        .append(Component.text("] ", NamedTextColor.GREEN, TextDecoration.BOLD))
-        .append(Component.text(""))
+    private val prefix by lazy {
+        Component.text("[", NamedTextColor.GREEN, TextDecoration.BOLD)
+            .append(Component.text("YoTPA", NamedTextColor.AQUA, TextDecoration.BOLD))
+            .append(Component.text("] ", NamedTextColor.GREEN, TextDecoration.BOLD))
+    }
 
     // Shared executor for async tasks
     private lateinit var executor: ScheduledExecutorService
 
     // Cached title components
-    private val titleCache = CachedTitleComponents()
+    private val titleCache by lazy { CachedTitleComponents() }
+
+    private lateinit var bStats: bStatsTPA
 
     data class TeleportData(
         val destination: Player,
         val startTime: Long,
         val duration: Int,
-        var lastShownSecond: Int = -1,
-        var titleShown: Boolean = false
+        var lastShownSecond: Int = -1
     )
 
     data class TpaRequest(
@@ -68,68 +68,70 @@ class YoTPA : JavaPlugin() {
     )
 
     private data class CachedTitleComponents(
-        val mainTitle: Component = Component.text("Teleporting in...")
+        val mainTitle: Component = Component.text("Teleporting...")
             .color(NamedTextColor.GREEN)
             .decoration(TextDecoration.BOLD, true),
-        val subtitle: Component = Component.text("Please don't move")
+        val subtitle: Component = Component.text("Don't move!")
             .color(NamedTextColor.YELLOW)
             .decoration(TextDecoration.BOLD, true),
         val titleTimes: Title.Times = Title.Times.times(
-            java.time.Duration.ofMillis(0),
-            java.time.Duration.ofSeconds(7),
+            java.time.Duration.ofMillis(250),
+            java.time.Duration.ofSeconds(6),
             java.time.Duration.ofMillis(500)
         )
     )
 
-    private val bStats = bStatsTPA(this)
-
-
     override fun onEnable() {
-        // Initialize executor service
-        executor = Executors.newScheduledThreadPool(
-            Runtime.getRuntime().availableProcessors(),
-            { runnable -> Thread(runnable, "YoTPA-Executor-${Thread.activeCount()}") }
-        )
+        // Initialize executor service with optimal thread count
+        val threadCount = minOf(4, Runtime.getRuntime().availableProcessors())
+        executor = Executors.newScheduledThreadPool(threadCount) { runnable ->
+            Thread(runnable, "YoTPA-Worker").apply {
+                isDaemon = true
+                priority = Thread.NORM_PRIORITY
+            }
+        }
 
         // Load configuration
         saveDefaultConfig()
         loadConfig()
 
+        // Initialize bStats
+        bStats = bStatsTPA(this)
+        bStats.initialize()
+
         // Register commands
         registerCommands()
 
-        // Register event listener
+        // Register event listener (only once!)
         server.pluginManager.registerEvents(PlayerMoveListener(this), this)
 
         // Start maintenance tasks
         startMaintenanceTasks()
 
-        // Load BStats
-        bStats.initialize()
-
-        // Register event listener
-        server.pluginManager.registerEvents(PlayerMoveListener(this), this)
-
         // Log startup
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
-        logger.info("YoTPA Version: 1.2.0")
+        logger.info("YoTPA Version: 1.2.2-Optimized")
         logger.info("YoTPA plugin has been enabled!")
     }
 
     override fun onDisable() {
         // Cancel all active teleport tasks
         teleportTasks.values.forEach { taskId ->
-            Bukkit.getScheduler().cancelTask(taskId)
+            runCatching { Bukkit.getScheduler().cancelTask(taskId) }
         }
 
-        // Shutdown executor service
-        executor.shutdownNow()
+        // Shutdown executor service gracefully
+        executor.shutdown()
         try {
-            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
-                logger.warning("Executor service did not terminate in time!")
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                executor.shutdownNow()
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    logger.warning("Executor service did not terminate!")
+                }
             }
         } catch (e: InterruptedException) {
-            logger.log(Level.WARNING, "Interrupted while waiting for executor shutdown", e)
+            executor.shutdownNow()
+            Thread.currentThread().interrupt()
         }
 
         // Clear all data
@@ -144,17 +146,15 @@ class YoTPA : JavaPlugin() {
             return true
         }
 
-        when (command.name.lowercase(Locale.ENGLISH)) {
-            "tpa" -> handleTpaCommand(sender, args)
-            "tpaccept" -> handleTpAcceptCommand(sender)
-            "tpadeny" -> handleTpDenyCommand(sender)
-            "tpahere" -> handleTpaHereCommand(sender, args)
-            "tpareload" -> handleReloadCommand(sender)
-            "tpastats" -> handleStatsCommand(sender)
-            else -> return false
+        return when (command.name.lowercase(Locale.ENGLISH)) {
+            "tpa" -> { handleTpaCommand(sender, args); true }
+            "tpaccept" -> { handleTpAcceptCommand(sender); true }
+            "tpadeny" -> { handleTpDenyCommand(sender); true }
+            "tpahere" -> { handleTpaHereCommand(sender, args); true }
+            "tpareload" -> { handleReloadCommand(sender); true }
+            "tpastats" -> { handleStatsCommand(sender); true }
+            else -> false
         }
-
-        return true
     }
 
     private fun handleTpaCommand(player: Player, args: Array<out String>) {
@@ -163,37 +163,17 @@ class YoTPA : JavaPlugin() {
             return
         }
 
-        val targetName = args[0]
-        val target = getPlayerByName(targetName)
+        val target = resolvePlayer(player, args[0], false) ?: return
 
-        if (target == null) {
-            sendMessage(player, buildPlayerNotFoundMessage(targetName))
-            return
-        }
-
-        if (target.uniqueId == player.uniqueId) {
-            sendMessage(player, Component.text("You cannot teleport to yourself.", NamedTextColor.RED))
-            return
-        }
-
-        if (isOnCooldown(player) && !player.hasPermission("yotpa.bypass.cooldown")) {
-            sendCooldownMessage(player)
-            return
-        }
+        if (!validateTeleportRequest(player, target)) return
 
         // Create and store request
         storeRequest(player, target, false)
+        updateCooldown(player)
 
-        // Update cooldown
-        if (!player.hasPermission("yotpa.bypass.cooldown")) {
-            cooldowns[player.uniqueId] = System.currentTimeMillis()
-        }
-
-        // Send messages
+        // Send messages and play sound
         sendTpaRequestMessages(player, target)
         playSound(target, requestSound)
-
-        // Bstats request counter
         bStats.incrementRequestSent()
     }
 
@@ -203,37 +183,17 @@ class YoTPA : JavaPlugin() {
             return
         }
 
-        val targetName = args[0]
-        val target = getPlayerByName(targetName)
+        val target = resolvePlayer(player, args[0], true) ?: return
 
-        if (target == null) {
-            sendMessage(player, buildPlayerNotFoundMessage(targetName))
-            return
-        }
-
-        if (target.uniqueId == player.uniqueId) {
-            sendMessage(player, Component.text("You cannot teleport to yourself.", NamedTextColor.RED))
-            return
-        }
-
-        if (isOnCooldown(player) && !player.hasPermission("yotpa.bypass.cooldown")) {
-            sendCooldownMessage(player)
-            return
-        }
+        if (!validateTeleportRequest(player, target)) return
 
         // Create and store request
         storeRequest(player, target, true)
+        updateCooldown(player)
 
-        // Update cooldown
-        if (!player.hasPermission("yotpa.bypass.cooldown")) {
-            cooldowns[player.uniqueId] = System.currentTimeMillis()
-        }
-
-        // Send messages
+        // Send messages and play sound
         sendTpaHereRequestMessages(player, target)
         playSound(target, requestSound)
-
-        // Bstats request counter
         bStats.incrementRequestSent()
     }
 
@@ -264,8 +224,6 @@ class YoTPA : JavaPlugin() {
 
         // Start teleport countdown
         startTeleportCountdown(teleporter, destination)
-
-        // Bstats acceptance counter
         bStats.incrementRequestAccepted()
     }
 
@@ -284,13 +242,10 @@ class YoTPA : JavaPlugin() {
         sendMessage(player, Component.text("You denied $requesterName's teleport request.", NamedTextColor.RED))
         requester?.let {
             sendMessage(it, Component.text("${player.name} denied your teleport request.", NamedTextColor.RED))
+            playSound(it, cancelSound)
         }
 
-        // Play cancel sounds
         playSound(player, cancelSound)
-        requester?.let { playSound(it, cancelSound) }
-
-        // Bstats denial counter
         bStats.incrementRequestDenied()
     }
 
@@ -305,28 +260,79 @@ class YoTPA : JavaPlugin() {
         sendMessage(player, Component.text("Configuration reloaded successfully.", NamedTextColor.GREEN))
     }
 
-    // Optimized teleport countdown with precise timing
-    fun startTeleportCountdown(teleporter: Player, destination: Player) {
-        val originalLocation = teleporter.location.clone()
+    private fun handleStatsCommand(player: Player) {
+        if (!player.hasPermission("yotpa.stats")) {
+            sendMessage(player, Component.text("You don't have permission to view statistics.", NamedTextColor.RED))
+            return
+        }
 
+        // Get stats from bStats class
+        val stats = bStats.getStatistics()
+        val acceptanceRate = bStats.getAcceptanceRate()
+
+        // Display statistics
+        player.sendMessage(Component.text("===== YoTPA Statistics =====").color(NamedTextColor.GOLD))
+
+        // All-time stats
+        stats["All-Time"]?.let { allTimeStats ->
+            player.sendMessage(Component.text("All-Time Statistics:").color(NamedTextColor.AQUA))
+            displayStats(player, allTimeStats)
+            player.sendMessage(Component.text("• Acceptance Rate: ").color(NamedTextColor.GOLD)
+                .append(Component.text("$acceptanceRate%").color(NamedTextColor.WHITE)))
+        }
+
+        // Daily stats
+        stats["Daily"]?.let { dailyStats ->
+            player.sendMessage(Component.text("Today's Statistics:").color(NamedTextColor.AQUA))
+            displayStats(player, dailyStats)
+        }
+    }
+
+    private fun displayStats(player: Player, stats: Map<String, Any>) {
+        player.sendMessage(Component.text("• Requests Sent: ").color(NamedTextColor.YELLOW)
+            .append(Component.text(stats["Sent"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Requests Accepted: ").color(NamedTextColor.GREEN)
+            .append(Component.text(stats["Accepted"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Requests Denied: ").color(NamedTextColor.RED)
+            .append(Component.text(stats["Denied"].toString()).color(NamedTextColor.WHITE)))
+        player.sendMessage(Component.text("• Requests Expired: ").color(NamedTextColor.GRAY)
+            .append(Component.text(stats["Expired"].toString()).color(NamedTextColor.WHITE)))
+    }
+
+    // Optimized teleport countdown - runs every second instead of every 0.25s
+    fun startTeleportCountdown(teleporter: Player, destination: Player) {
         // Cancel any existing teleport
         cancelTeleport(teleporter.uniqueId)
+
+        // Store original location
+        val originalLocation = teleporter.location.clone()
+        teleporter.setMetadata("yotpa:original-location", FixedMetadataValue(this, originalLocation))
 
         // Create teleport data
         val data = TeleportData(
             destination = destination,
             startTime = System.currentTimeMillis(),
-            duration = teleportDelay * 1000
+            duration = teleportDelay * 1000,
+            lastShownSecond = teleportDelay
         )
         teleportData[teleporter.uniqueId] = data
 
-        // Use more frequent updates for smoother countdown
+        // Show title immediately
+        teleporter.showTitle(Title.title(
+            titleCache.mainTitle,
+            titleCache.subtitle,
+            titleCache.titleTimes
+        ))
+
+        // Initial countdown message
+        sendCountdownMessage(teleporter, teleportDelay)
+
+        // Run every 1 second (20 ticks) for better performance
         val taskId = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
             processCountdown(teleporter, data)
-        }, 0L, 5L) // Every 0.25 seconds
+        }, 20L, 20L)
 
         teleportTasks[teleporter.uniqueId] = taskId
-        teleporter.setMetadata("yotpa:original-location", FixedMetadataValue(this, originalLocation))
     }
 
     private fun processCountdown(teleporter: Player, data: TeleportData) {
@@ -337,34 +343,26 @@ class YoTPA : JavaPlugin() {
             performTeleport(teleporter, data.destination)
             cancelTeleport(teleporter.uniqueId)
         } else {
-            val remainingSeconds = ((remaining + 500) / 1000).toInt()
+            val remainingSeconds = ((remaining + 999) / 1000).toInt()
 
             // Only show message when second changes
-            if (remainingSeconds != data.lastShownSecond) {
+            if (remainingSeconds != data.lastShownSecond && remainingSeconds > 0) {
                 data.lastShownSecond = remainingSeconds
-                sendMessage(teleporter, Component.text("Teleporting in ", NamedTextColor.GREEN).append(
-                    Component.text("$remainingSeconds", NamedTextColor.YELLOW)
-                        .decoration(TextDecoration.BOLD, true).append(Component.text(" seconds", NamedTextColor.GREEN).decoration(TextDecoration.BOLD, true))
-                ))
+                sendCountdownMessage(teleporter, remainingSeconds)
                 playSound(teleporter, countdownSound)
-
-            }
-
-            // Show title once
-            if (!data.titleShown) {
-                data.titleShown = true
-                teleporter.showTitle(Title.title(
-                    titleCache.mainTitle,
-                    titleCache.subtitle,
-                    titleCache.titleTimes
-                ))
             }
         }
     }
 
+    private fun sendCountdownMessage(player: Player, seconds: Int) {
+        sendMessage(player, Component.text("Teleporting in ", NamedTextColor.GREEN)
+            .append(Component.text(seconds.toString(), NamedTextColor.YELLOW, TextDecoration.BOLD))
+            .append(Component.text(" second${if (seconds != 1) "s" else ""}", NamedTextColor.GREEN, TextDecoration.BOLD)))
+    }
+
     fun cancelTeleport(uuid: UUID) {
         teleportTasks.remove(uuid)?.let { taskId ->
-            Bukkit.getScheduler().cancelTask(taskId)
+            runCatching { Bukkit.getScheduler().cancelTask(taskId) }
         }
         teleportData.remove(uuid)
         Bukkit.getPlayer(uuid)?.removeMetadata("yotpa:original-location", this)
@@ -378,7 +376,8 @@ class YoTPA : JavaPlugin() {
 
     private fun performTeleport(teleporter: Player, destination: Player) {
         teleporter.teleport(destination)
-        sendMessage(teleporter, Component.text("Teleported to ", NamedTextColor.GREEN).append(Component.text(destination.name, NamedTextColor.YELLOW)))
+        sendMessage(teleporter, Component.text("Teleported to ", NamedTextColor.GREEN)
+            .append(Component.text(destination.name, NamedTextColor.YELLOW)))
 
         // Play success sounds
         playSound(teleporter, successSound)
@@ -387,24 +386,28 @@ class YoTPA : JavaPlugin() {
 
     // Optimized maintenance tasks
     private fun startMaintenanceTasks() {
-        // Optimized expiration checker
+        // Request expiration checker - every 10 seconds
         executor.scheduleAtFixedRate({
-            try {
-                checkExpiredRequests()
-            } catch (e: Exception) {
-                logger.log(Level.WARNING, "Error during expiration check", e)
-            }
-        }, 5, 5, TimeUnit.SECONDS)
+            runCatching { checkExpiredRequests() }
+                .onFailure { e -> logger.log(Level.WARNING, "Error during expiration check", e) }
+        }, 10, 10, TimeUnit.SECONDS)
 
-        // Cache cleanup task
+        // Cache cleanup - every 2 minutes
         executor.scheduleAtFixedRate({
-            cleanupCaches()
-        }, 60, 60, TimeUnit.SECONDS)
+            runCatching { cleanupCaches() }
+                .onFailure { e -> logger.log(Level.WARNING, "Error during cache cleanup", e) }
+        }, 120, 120, TimeUnit.SECONDS)
+
+        // Cooldown cleanup - every 5 minutes
+        executor.scheduleAtFixedRate({
+            runCatching { cleanupExpiredCooldowns() }
+                .onFailure { e -> logger.log(Level.WARNING, "Error during cooldown cleanup", e) }
+        }, 300, 300, TimeUnit.SECONDS)
     }
 
     private fun checkExpiredRequests() {
         val currentTime = System.currentTimeMillis()
-        val expiredRequests = ArrayList<UUID>()
+        val expiredRequests = mutableListOf<UUID>()
 
         tpaRequests.forEach { (targetUuid, request) ->
             if (currentTime - request.timestamp > requestTimeout * 1000L) {
@@ -425,32 +428,46 @@ class YoTPA : JavaPlugin() {
     private fun processExpiredRequests(expiredRequests: List<UUID>) {
         expiredRequests.forEach { targetUuid ->
             tpaRequests.remove(targetUuid)?.let { request ->
-                val targetPlayer = Bukkit.getPlayer(targetUuid)
-                val requesterPlayer = Bukkit.getPlayer(request.requesterUUID)
-
-                targetPlayer?.let { target ->
+                Bukkit.getPlayer(targetUuid)?.let { target ->
                     sendMessage(target, Component.text("Teleport request from ${getPlayerName(request.requesterUUID)} has expired.", NamedTextColor.RED))
                 }
 
-                requesterPlayer?.let { requester ->
+                Bukkit.getPlayer(request.requesterUUID)?.let { requester ->
                     sendMessage(requester, Component.text("Your teleport request to ${getPlayerName(targetUuid)} has expired.", NamedTextColor.RED))
                 }
+
+                bStats.incrementRequestExpired()
             }
-            // Increment expired counter when a request expires
-            bStats.incrementRequestExpired()
         }
     }
 
     private fun cleanupCaches() {
-        // Clean up disconnected players from cache
-        playerNameCache.keys.removeIf { uuid ->
-            Bukkit.getPlayer(uuid) == null
+        // More efficient cleanup using iterator
+        val iterator = playerNameCache.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (Bukkit.getPlayer(entry.key) == null) {
+                iterator.remove()
+            }
+        }
+    }
+
+    private fun cleanupExpiredCooldowns() {
+        val currentTime = System.currentTimeMillis()
+        val cooldownExpiry = requestCooldown * 1000L
+
+        val iterator = cooldowns.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (currentTime - entry.value > cooldownExpiry) {
+                iterator.remove()
+            }
         }
     }
 
     // Utility methods
     private fun registerCommands() {
-        arrayOf("tpa", "tpaccept", "tpadeny", "tpahere", "tpareload").forEach { cmd ->
+        arrayOf("tpa", "tpaccept", "tpadeny", "tpahere", "tpareload", "tpastats").forEach { cmd ->
             getCommand(cmd)?.setExecutor(this)
         }
     }
@@ -463,22 +480,56 @@ class YoTPA : JavaPlugin() {
         playerNameCache.clear()
     }
 
+    private fun resolvePlayer(sender: Player, targetName: String, isHereRequest: Boolean): Player? {
+        val target = getPlayerByName(targetName)
+
+        if (target == null) {
+            sendMessage(sender, buildPlayerNotFoundMessage(targetName))
+            return null
+        }
+
+        return target
+    }
+
+    private fun validateTeleportRequest(requester: Player, target: Player): Boolean {
+        if (target.uniqueId == requester.uniqueId) {
+            sendMessage(requester, Component.text("You cannot teleport to yourself.", NamedTextColor.RED))
+            return false
+        }
+
+        if (isOnCooldown(requester) && !requester.hasPermission("yotpa.bypass.cooldown")) {
+            sendCooldownMessage(requester)
+            return false
+        }
+
+        return true
+    }
+
     private fun getPlayerByName(name: String): Player? {
-        // First check exact match for efficiency
+        // Optimized lookup: exact match first, then case-insensitive
         return Bukkit.getPlayer(name) ?:
-        // Then check UUID cache
-        playerNameCache.entries.find { it.value.equals(name, ignoreCase = true) }?.let { Bukkit.getPlayer(it.key) }
+        Bukkit.getOnlinePlayers().find { it.name.equals(name, ignoreCase = true) }
     }
 
     private fun getPlayerName(uuid: UUID): String {
-        return playerNameCache.computeIfAbsent(uuid) { id ->
-            Bukkit.getPlayer(id)?.name ?: "Unknown"
+        return playerNameCache.getOrPut(uuid) {
+            Bukkit.getPlayer(uuid)?.name ?: "Unknown"
         }
     }
 
     private fun storeRequest(requester: Player, target: Player, isHereRequest: Boolean) {
-        val request = TpaRequest(requester.uniqueId, target.uniqueId, System.currentTimeMillis(), isHereRequest)
-        tpaRequests[target.uniqueId] = request
+        tpaRequests[target.uniqueId] = TpaRequest(
+            requester.uniqueId,
+            target.uniqueId,
+            System.currentTimeMillis(),
+            isHereRequest
+        )
+    }
+
+    private fun updateCooldown(player: Player) {
+        if (!player.hasPermission("yotpa.bypass.cooldown")) {
+            cooldowns[player.uniqueId] = System.currentTimeMillis()
+        }
     }
 
     private fun isOnCooldown(player: Player): Boolean {
@@ -491,19 +542,17 @@ class YoTPA : JavaPlugin() {
         requestTimeout = config.getInt("request-timeout", 60)
         requestCooldown = config.getInt("request-cooldown", 30)
         teleportDelay = config.getInt("teleport-delay", 5)
-        serverName = config.getString("server-name", "RELAX Vanilla SMP") ?: "RELAX Vanilla SMP"
-
-        // Load sounds with error handling
+        serverName = config.getString("server-name") ?: "RELAX Vanilla SMP"
         loadSounds()
     }
 
     private fun loadSounds() {
-        try {
+        runCatching {
             countdownSound = Sound.BLOCK_NOTE_BLOCK_PLING
             successSound = Sound.ENTITY_ENDERMAN_TELEPORT
             cancelSound = Sound.ENTITY_VILLAGER_NO
             requestSound = Sound.ENTITY_EXPERIENCE_ORB_PICKUP
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.log(Level.WARNING, "Invalid sound name in config, using defaults", e)
             setDefaultSounds()
         }
@@ -531,13 +580,12 @@ class YoTPA : JavaPlugin() {
         val remainingCooldown = ((cooldowns[player.uniqueId]!! + (requestCooldown * 1000L)) - System.currentTimeMillis()) / 1000
         sendMessage(player, Component.text("You need to wait ", NamedTextColor.RED)
             .append(Component.text("$remainingCooldown ", NamedTextColor.YELLOW))
-            .append(Component.text("seconds before sending another request.", NamedTextColor.RED)))
+            .append(Component.text("second${if (remainingCooldown != 1L) "s" else ""} before sending another request.", NamedTextColor.RED)))
     }
 
     private fun sendTpaRequestMessages(requester: Player, target: Player) {
         sendMessage(requester, Component.text("Teleport request sent to ", NamedTextColor.GREEN)
-            .append(Component.text(target.name, NamedTextColor.YELLOW))
-            .append(Component.text(".", NamedTextColor.GREEN)))
+            .append(Component.text(target.name, NamedTextColor.YELLOW)))
 
         sendMessage(target, Component.text(requester.name, NamedTextColor.YELLOW)
             .append(Component.text(" has requested to teleport to you.", NamedTextColor.GREEN)))
@@ -545,8 +593,7 @@ class YoTPA : JavaPlugin() {
 
     private fun sendTpaHereRequestMessages(requester: Player, target: Player) {
         sendMessage(requester, Component.text("Teleport request sent to ", NamedTextColor.GREEN)
-            .append(Component.text(target.name, NamedTextColor.YELLOW))
-            .append(Component.text(".", NamedTextColor.GREEN)))
+            .append(Component.text(target.name, NamedTextColor.YELLOW)))
 
         sendMessage(target, Component.text(requester.name, NamedTextColor.YELLOW)
             .append(Component.text(" has requested you to teleport to them.", NamedTextColor.GREEN)))
@@ -562,55 +609,10 @@ class YoTPA : JavaPlugin() {
     }
 
     private fun playSound(player: Player, sound: Sound) {
-        try {
+        runCatching {
             player.playSound(player.location, sound, 1.0f, 1.0f)
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.log(Level.WARNING, "Failed to play sound: $sound", e)
         }
     }
-
-    private fun handleStatsCommand(player: Player) {
-        if (!player.hasPermission("yotpa.stats")) {
-            val message = Component.text("You don't have permission to view statistics.")
-                .color(NamedTextColor.RED)
-            player.sendMessage(prefix.append(message))
-            return
-        }
-
-        // Get stats from bStats class
-        val stats = bStats.getStatistics()
-        val acceptanceRate = bStats.getAcceptanceRate()
-
-        // Display statistics
-        player.sendMessage(Component.text("===== YoTPA Statistics =====").color(NamedTextColor.GOLD))
-
-        // All-time stats
-        val allTimeStats = stats["All-Time"] ?: emptyMap()
-        player.sendMessage(Component.text("All-Time Statistics:").color(NamedTextColor.AQUA))
-        player.sendMessage(Component.text("• Requests Sent: ").color(NamedTextColor.YELLOW)
-            .append(Component.text(allTimeStats["Sent"].toString()).color(NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Requests Accepted: ").color(NamedTextColor.GREEN)
-            .append(Component.text(allTimeStats["Accepted"].toString()).color(NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Requests Denied: ").color(NamedTextColor.RED)
-            .append(Component.text(allTimeStats["Denied"].toString()).color(NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Requests Expired: ").color(NamedTextColor.GRAY)
-            .append(Component.text(allTimeStats["Expired"].toString()).color(NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Acceptance Rate: ").color(NamedTextColor.GOLD)
-            .append(Component.text("$acceptanceRate%").color(NamedTextColor.WHITE)))
-
-        // Daily stats
-        val dailyStats = stats["Daily"] ?: emptyMap()
-        player.sendMessage(Component.text("Today's Statistics:").color(NamedTextColor.AQUA))
-        player.sendMessage(Component.text("• Requests Sent: ").color(NamedTextColor.YELLOW)
-            .append(Component.text(dailyStats["Sent"].toString()).color(NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Requests Accepted: ").color(NamedTextColor.GREEN)
-            .append(Component.text(dailyStats["Accepted"].toString()).color(NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Requests Denied: ").color(NamedTextColor.RED)
-            .append(Component.text(dailyStats["Denied"].toString()).color(NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Requests Expired: ").color(NamedTextColor.GRAY)
-            .append(Component.text(dailyStats["Expired"].toString()).color(NamedTextColor.WHITE)))
-    }
-
-
-
 }

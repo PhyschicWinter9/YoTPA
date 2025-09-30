@@ -1,9 +1,9 @@
 name: YoTPA
-version: '1.2.1'
+version: '1.3.0'
 main: com.relaxlikes.yoTPA.YoTPA
 api-version: '1.21'
 authors: [physchicWinter9, relaxlikes]
-description: Simple TPA plugin for RELAX SMP
+description: Simple TPA plugin
 website: relaxlikes.com
 commands:
   tpa:

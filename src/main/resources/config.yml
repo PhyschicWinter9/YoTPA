@@ -1,15 +1,127 @@
-# YoTPA Configuration
-# Plugin by RelaxLikes
+# ═══════════════════════════════════════════════════════════════
+#                YoTPA Configuration v1.3.0-Adaptive
+#           Smart Auto-Optimization for All Server Sizes
+# ═══════════════════════════════════════════════════════════════
 
-# Server name that appears in messages
-server-name: "RELAXLIKES"
-
-# Time in seconds before a teleport request expires
+# Request timeout in seconds (how long before a request expires)
 request-timeout: 60
 
-# Time in seconds before a player can make another teleport request
+# Request cooldown in seconds (how long before sending another request)
 request-cooldown: 30
 
-# Time in seconds the player must wait (countdown) before teleporting
+# Teleport delay in seconds (countdown before actual teleport)
 teleport-delay: 5
 
+# ═══════════════════════════════════════════════════════════════
+#                    PERFORMANCE SETTINGS
+# ═══════════════════════════════════════════════════════════════
+# The plugin will automatically detect your server's RAM and adjust
+# its performance settings accordingly. You can override this by
+# changing the mode below.
+
+performance:
+  # Performance mode options:
+  # - AUTO: Automatically detect based on available RAM (RECOMMENDED)
+  # - ULTRA_LIGHT: For 512 MB - 1 GB RAM (Free/Cheap VPS)
+  # - LIGHT: For 1-2 GB RAM (Low-end servers)
+  # - BALANCED: For 2-4 GB RAM (Mid-range servers)
+  # - HIGH_PERFORMANCE: For 4+ GB RAM (High-end servers)
+  mode: AUTO
+
+# ═══════════════════════════════════════════════════════════════
+#                 PERFORMANCE MODE DETAILS
+# ═══════════════════════════════════════════════════════════════
+#
+# ULTRA_LIGHT (≤ 768 MB RAM):
+#   - No async executor (Bukkit scheduler only)
+#   - Minimal caching
+#   - 30s expiration checks
+#   - 5min cache cleanup
+#   - 0.5 block movement threshold
+#   - Best for: 5-10 players, minimal plugins
+#
+# LIGHT (≤ 1.5 GB RAM):
+#   - 2 executor threads
+#   - Moderate caching
+#   - 20s expiration checks
+#   - 4min cache cleanup
+#   - 0.4 block movement threshold
+#   - Best for: 10-15 players, light plugins
+#
+# BALANCED (≤ 3 GB RAM):
+#   - 3 executor threads
+#   - Full caching
+#   - 10s expiration checks
+#   - 2min cache cleanup
+#   - 0.3 block movement threshold
+#   - Best for: 15-25 players, moderate plugins
+#
+# HIGH_PERFORMANCE (> 3 GB RAM):
+#   - 4 executor threads
+#   - Full caching
+#   - 5s expiration checks
+#   - 1min cache cleanup
+#   - 0.25 block movement threshold (most strict)
+#   - Best for: 25+ players, any plugins
+#
+# ═══════════════════════════════════════════════════════════════
+
+# Sound effects (use Minecraft Sound enum names)
+# Format: UPPERCASE_WITH_UNDERSCORES
+# Full list: https://jd.papermc.io/paper/1.21/org/bukkit/Sound.html
+sounds:
+  # Sound when countdown starts
+  countdown: "BLOCK_NOTE_BLOCK_PLING"
+
+  # Sound when teleport succeeds
+  success: "ENTITY_ENDERMAN_TELEPORT"
+
+  # Sound when teleport is cancelled
+  cancel: "ENTITY_VILLAGER_NO"
+
+  # Sound when request is received
+  request: "ENTITY_EXPERIENCE_ORB_PICKUP"
+
+# ═══════════════════════════════════════════════════════════════
+#                    FEATURE TOGGLES
+# ═══════════════════════════════════════════════════════════════
+
+features:
+  # Enable statistics tracking (/tpastats command)
+  statistics: true
+
+  # Enable bStats metrics (helps developers understand usage)
+  bstats: true
+
+  # Enable title animations during countdown
+  titles: true
+
+  # Enable sound effects
+  sounds: true
+
+# ═══════════════════════════════════════════════════════════════
+#                    OPTIMIZATION TIPS
+# ═══════════════════════════════════════════════════════════════
+#
+# For FREE/LOW-SPEC servers (512 MB - 1 GB):
+# 1. Keep mode as AUTO or ULTRA_LIGHT
+# 2. Limit total plugins to 5-8
+# 3. Set view-distance to 4 in server.properties
+# 4. Use Paper instead of Spigot
+# 5. Limit players to 5-10 concurrent
+#
+# For MID-RANGE servers (2-4 GB):
+# 1. Use AUTO or BALANCED mode
+# 2. Can run 10-15 plugins
+# 3. view-distance 6-8
+# 4. 15-25 players should be fine
+#
+# For HIGH-END servers (4+ GB):
+# 1. Use AUTO or HIGH_PERFORMANCE mode
+# 2. No significant plugin limitations
+# 3. view-distance 10-12
+# 4. 25+ players supported
+#
+# Need help? Check /tpainfo command to see detected settings!
+#
+# ═══════════════════════════════════════════════════════════════

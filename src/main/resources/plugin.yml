@@ -1,57 +1,84 @@
 name: YoTPA
-version: '1.3.0'
+version: 1.3.0-Adaptive
 main: com.relaxlikes.yoTPA.YoTPA
-api-version: '1.21'
-authors: [physchicWinter9, relaxlikes]
-description: Simple TPA plugin
-website: relaxlikes.com
+api-version: 1.21
+author: PhyschicWinter9 & VIBEs Coding XD
+description: Smart adaptive teleport plugin that automatically optimizes for any server size
+website: https://github.com/relaxlikes/yoTPA
+
+# Load early to reduce startup time
+load: STARTUP
+
 commands:
   tpa:
-    description: Request to teleport to another player
+    description: Request to teleport to a player
     usage: /tpa <player>
-    permission: yotpa.tpa
+    permission: yotpa.use
+    aliases: [teleportask]
+
   tpaccept:
     description: Accept a teleport request
     usage: /tpaccept
-    permission: yotpa.tpaccept
+    permission: yotpa.use
+
   tpadeny:
     description: Deny a teleport request
     usage: /tpadeny
-    permission: yotpa.tpadeny
+    permission: yotpa.use
+    aliases: [tpdeny]
+
   tpahere:
     description: Request a player to teleport to you
     usage: /tpahere <player>
-    permission: yotpa.tpahere
+    permission: yotpa.use
+
   tpareload:
-    description: Reload the YoTPA plugin configuration
+    description: Reload the plugin configuration
     usage: /tpareload
     permission: yotpa.reload
+
   tpastats:
-    description: View teleport request statistics
+    description: View teleport statistics
     usage: /tpastats
     permission: yotpa.stats
+
+  tpainfo:
+    description: View system information and performance mode
+    usage: /tpainfo
+    permission: yotpa.info
+
 permissions:
-  yotpa.tpa:
-    description: Allows use of the tpa command
+  yotpa.use:
+    description: Allow using basic TPA commands
     default: true
-  yotpa.tpaccept:
-    description: Allows accepting teleport requests
-    default: true
-  yotpa.tpadeny:
-    description: Allows denying teleport requests
-    default: true
-  yotpa.tpahere:
-    description: Allows requesting others to teleport to you
-    default: true
+
   yotpa.reload:
-    description: Allows reloading the plugin configuration
+    description: Allow reloading the configuration
     default: op
+
   yotpa.stats:
-    description: Allows viewing teleport request statistics
+    description: Allow viewing statistics
     default: op
+
+  yotpa.info:
+    description: Allow viewing system information
+    default: op
+
   yotpa.bypass.cooldown:
-    description: Allows bypassing teleport cooldowns
+    description: Bypass teleport request cooldown
     default: op
+
   yotpa.bypass.timeout:
-    description: Allows bypassing teleport timeout
+    description: Bypass request timeout expiration
     default: op
+
+  yotpa.*:
+    description: All YoTPA permissions
+    default: op
+    children:
+      yotpa.use: true
+      yotpa.reload: true
+      yotpa.stats: true
+      yotpa.info: true
+      yotpa.bypass.cooldown: true
+      yotpa.bypass.timeout: true

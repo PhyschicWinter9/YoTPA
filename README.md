@@ -1,5 +1,5 @@
 
-![Logo](https://media.relaxlikes.com/yotpa/yotpa.png)
+![Logo](screenshot/yotpa.png)
 
 
 # YoTPA

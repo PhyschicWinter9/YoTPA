@@ -5,7 +5,6 @@ import net.kyori.adventure.text.format.NamedTextColor
 import net.kyori.adventure.text.format.TextDecoration
 import net.kyori.adventure.title.Title
 import org.bukkit.Bukkit
-import org.bukkit.Sound
 import org.bukkit.NamespacedKey
 import org.bukkit.Registry
 import org.bukkit.command.Command
@@ -47,11 +46,11 @@ class YoTPA : JavaPlugin() {
     @Volatile private var requestCooldown = 30
     @Volatile private var teleportDelay = 5
 
-    // Sound keys using modern Paper API
-    @Volatile private var countdownSound = Sound.BLOCK_NOTE_BLOCK_PLING
-    @Volatile private var successSound = Sound.ENTITY_ENDERMAN_TELEPORT
-    @Volatile private var cancelSound = Sound.ENTITY_VILLAGER_NO
-    @Volatile private var requestSound = Sound.ENTITY_EXPERIENCE_ORB_PICKUP
+    // Sound keys - store as Key instead of Sound
+    @Volatile private var countdownSoundKey = NamespacedKey.minecraft("block.note_block.pling")
+    @Volatile private var successSoundKey = NamespacedKey.minecraft("entity.enderman.teleport")
+    @Volatile private var cancelSoundKey = NamespacedKey.minecraft("entity.villager.no")
+    @Volatile private var requestSoundKey = NamespacedKey.minecraft("entity.experience_orb.pickup")
 
     // Cached components
     private val prefix by lazy {
@@ -139,7 +138,7 @@ class YoTPA : JavaPlugin() {
         // Log startup info
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
-        logger.info("YoTPA Version: 1.3.0")
+        logger.info("YoTPA Version: 1.3.0-Adaptive")
         logger.info("Performance Mode: ${detectedMode.name}")
         logger.info("Available RAM: ${getAvailableMemoryMB()} MB")
         logger.info("Max RAM: ${getMaxMemoryMB()} MB")
@@ -340,7 +339,7 @@ class YoTPA : JavaPlugin() {
         updateCooldown(player)
 
         sendTpaRequestMessages(player, target)
-        playSound(target, requestSound)
+        playSound(target, requestSoundKey)
         bStats.incrementRequestSent()
     }
 
@@ -362,7 +361,7 @@ class YoTPA : JavaPlugin() {
         updateCooldown(player)
 
         sendTpaHereRequestMessages(player, target)
-        playSound(target, requestSound)
+        playSound(target, requestSoundKey)
         bStats.incrementRequestSent()
     }
 
@@ -403,10 +402,10 @@ class YoTPA : JavaPlugin() {
         sendMessage(player, Component.text("You denied $requesterName's teleport request.", NamedTextColor.RED))
         requester?.let {
             sendMessage(it, Component.text("${player.name} denied your teleport request.", NamedTextColor.RED))
-            playSound(it, cancelSound)
+            playSound(it, cancelSoundKey)
         }
 
-        playSound(player, cancelSound)
+        playSound(player, cancelSoundKey)
         bStats.incrementRequestDenied()
     }
 
@@ -416,11 +415,26 @@ class YoTPA : JavaPlugin() {
             return
         }
 
-        // Validate config before reloading
+        // Try to reload config first (catch YAML errors)
+        val reloadResult = runCatching {
+            reloadConfig()
+            true
+        }.getOrElse { e ->
+            sendMessage(player, Component.text("Failed to load config.yml!", NamedTextColor.RED))
+            player.sendMessage(Component.text("  Error: ${e.message}", NamedTextColor.GRAY))
+            player.sendMessage(Component.text("  Fix the YAML syntax and try again.", NamedTextColor.YELLOW))
+            logger.log(Level.SEVERE, "Failed to reload config", e)
+            false
+        }
+
+        if (!reloadResult) {
+            return // Stop if YAML is broken
+        }
+
+        // Now validate the reloaded config
         val validationResult = validateConfig()
 
         if (validationResult.isValid) {
-            reloadConfig()
             loadConfig()
 
             val oldMode = detectedMode
@@ -452,7 +466,8 @@ class YoTPA : JavaPlugin() {
                 }
             }
 
-            sendMessage(player, Component.text("Config not reloaded. Fix errors and try again.", NamedTextColor.GRAY))
+            sendMessage(player, Component.text("Config not applied. Fix errors and try again.", NamedTextColor.GRAY))
+            sendMessage(player, Component.text("Using previous configuration.", NamedTextColor.DARK_GRAY))
         }
     }
 
@@ -508,15 +523,24 @@ class YoTPA : JavaPlugin() {
                 if (soundName.isEmpty()) {
                     warnings.add("Sound '$key' is not set, using default")
                 } else {
-                    // Try to parse sound
-                    try {
-                        val normalized = soundName.lowercase().replace("_", ".")
-                        val soundKey = NamespacedKey.minecraft(normalized)
-                        val sound = Registry.SOUNDS.get(soundKey)
+                    // Validate by trying to parse the sound
+                    val testKey = runCatching {
+                        if (soundName.contains(".")) {
+                            // New format: "block.note_block.pling"
+                            NamespacedKey.minecraft(soundName)
+                        } else {
+                            // Old format: "BLOCK_NOTE_BLOCK_PLING" -> convert
+                            val converted = soundName.lowercase().replace("_", ".")
+                            NamespacedKey.minecraft(converted)
+                        }
+                    }.getOrNull()
+
+                    if (testKey != null) {
+                        val sound = Registry.SOUNDS.get(testKey)
                         if (sound == null) {
                             warnings.add("Sound '$key' ($soundName) not found in registry, will use default")
                         }
-                    } catch (_: Exception) {
+                    } else {
                         warnings.add("Sound '$key' ($soundName) has invalid format")
                     }
                 }
@@ -574,7 +598,7 @@ class YoTPA : JavaPlugin() {
 
         player.sendMessage(Component.text("═══ YoTPA System Info ═══", NamedTextColor.GOLD))
         player.sendMessage(Component.text("Version: ", NamedTextColor.YELLOW)
-            .append(Component.text("1.3.0", NamedTextColor.WHITE)))
+            .append(Component.text("1.3.0-Adaptive", NamedTextColor.WHITE)))
         player.sendMessage(Component.text("Performance Mode: ", NamedTextColor.YELLOW)
             .append(Component.text(detectedMode.name, NamedTextColor.WHITE)))
         player.sendMessage(Component.text("Available RAM: ", NamedTextColor.YELLOW)
@@ -649,7 +673,7 @@ class YoTPA : JavaPlugin() {
             if (remainingSeconds != data.lastShownSecond && remainingSeconds > 0) {
                 data.lastShownSecond = remainingSeconds
                 sendCountdownMessage(teleporter, remainingSeconds)
-                playSound(teleporter, countdownSound)
+                playSound(teleporter, countdownSoundKey)
             }
         }
     }
@@ -671,7 +695,7 @@ class YoTPA : JavaPlugin() {
     fun cancelTeleportDueToMovement(player: Player) {
         cancelTeleport(player.uniqueId)
         sendMessage(player, Component.text("Teleportation cancelled due to movement.", NamedTextColor.RED))
-        playSound(player, cancelSound)
+        playSound(player, cancelSoundKey)
     }
 
     private fun performTeleport(teleporter: Player, destination: Player) {
@@ -679,8 +703,8 @@ class YoTPA : JavaPlugin() {
         sendMessage(teleporter, Component.text("Teleported to ", NamedTextColor.GREEN)
             .append(Component.text(destination.name, NamedTextColor.YELLOW)))
 
-        playSound(teleporter, successSound)
-        playSound(destination, successSound)
+        playSound(teleporter, successSoundKey)
+        playSound(destination, successSoundKey)
     }
 
     private fun startMaintenanceTasks() {
@@ -840,21 +864,21 @@ class YoTPA : JavaPlugin() {
 
     private fun loadSounds() {
         runCatching {
-            countdownSound = parseSoundSafe(
-                config.getString("sounds.countdown", "BLOCK_NOTE_BLOCK_PLING")!!,
-                Sound.BLOCK_NOTE_BLOCK_PLING
+            countdownSoundKey = parseSoundKey(
+                config.getString("sounds.countdown", "block.note_block.pling")!!,
+                NamespacedKey.minecraft("block.note_block.pling")
             )
-            successSound = parseSoundSafe(
-                config.getString("sounds.success", "ENTITY_ENDERMAN_TELEPORT")!!,
-                Sound.ENTITY_ENDERMAN_TELEPORT
+            successSoundKey = parseSoundKey(
+                config.getString("sounds.success", "entity.enderman.teleport")!!,
+                NamespacedKey.minecraft("entity.enderman.teleport")
             )
-            cancelSound = parseSoundSafe(
-                config.getString("sounds.cancel", "ENTITY_VILLAGER_NO")!!,
-                Sound.ENTITY_VILLAGER_NO
+            cancelSoundKey = parseSoundKey(
+                config.getString("sounds.cancel", "entity.villager.no")!!,
+                NamespacedKey.minecraft("entity.villager.no")
             )
-            requestSound = parseSoundSafe(
-                config.getString("sounds.request", "ENTITY_EXPERIENCE_ORB_PICKUP")!!,
-                Sound.ENTITY_EXPERIENCE_ORB_PICKUP
+            requestSoundKey = parseSoundKey(
+                config.getString("sounds.request", "entity.experience_orb.pickup")!!,
+                NamespacedKey.minecraft("entity.experience_orb.pickup")
             )
         }.onFailure { e ->
             logger.log(Level.WARNING, "Error loading sounds from config, using defaults", e)
@@ -862,25 +886,40 @@ class YoTPA : JavaPlugin() {
         }
     }
 
-    private fun parseSoundSafe(soundName: String, default: Sound): Sound {
-        return try {
-            // Convert UPPERCASE_WITH_UNDERSCORES to minecraft:lowercase.with.dots
-            val normalizedName = soundName.lowercase().replace("_", ".")
-            val key = NamespacedKey.minecraft(normalizedName)
+    private fun parseSoundKey(soundName: String, default: NamespacedKey): NamespacedKey {
+        return runCatching {
+            // Support both formats:
+            // 1. New format: "block.note_block.pling" (recommended)
+            // 2. Old format: "BLOCK_NOTE_BLOCK_PLING" (auto-convert)
 
-            // Use Registry API instead of deprecated valueOf()
-            Registry.SOUNDS.get(key) ?: default
-        } catch (_: Exception) {
-            logger.warning("Invalid sound name: $soundName, using default")
+            val key = if (soundName.contains(".")) {
+                // New format with dots: "block.note_block.pling"
+                NamespacedKey.minecraft(soundName)
+            } else {
+                // Old format with underscores: "BLOCK_NOTE_BLOCK_PLING"
+                // Convert to: "block.note_block.pling"
+                val converted = soundName.lowercase().replace("_", ".")
+                NamespacedKey.minecraft(converted)
+            }
+
+            // Validate that sound exists in registry
+            if (Registry.SOUNDS.get(key) != null) {
+                key
+            } else {
+                logger.fine("Sound '$soundName' not found in registry, using default")
+                default
+            }
+        }.getOrElse {
+            logger.fine("Invalid sound name: $soundName, using default")
             default
         }
     }
 
     private fun setDefaultSounds() {
-        countdownSound = Sound.BLOCK_NOTE_BLOCK_PLING
-        successSound = Sound.ENTITY_ENDERMAN_TELEPORT
-        cancelSound = Sound.ENTITY_VILLAGER_NO
-        requestSound = Sound.ENTITY_EXPERIENCE_ORB_PICKUP
+        countdownSoundKey = NamespacedKey.minecraft("block.note_block.pling")
+        successSoundKey = NamespacedKey.minecraft("entity.enderman.teleport")
+        cancelSoundKey = NamespacedKey.minecraft("entity.villager.no")
+        requestSoundKey = NamespacedKey.minecraft("entity.experience_orb.pickup")
     }
 
     private fun sendMessage(sender: CommandSender, message: Component) {
@@ -925,11 +964,15 @@ class YoTPA : JavaPlugin() {
             .append(Component.text(" accepted your teleport request.", NamedTextColor.GREEN)))
     }
 
-    private fun playSound(player: Player, sound: Sound) {
+    private fun playSound(player: Player, soundKey: NamespacedKey) {
         runCatching {
-            player.playSound(player.location, sound, 1.0f, 1.0f)
+            // Get sound from registry using the key
+            val sound = Registry.SOUNDS.get(soundKey)
+            if (sound != null) {
+                player.playSound(player.location, sound, 1.0f, 1.0f)
+            }
         }.onFailure { e ->
-            logger.log(Level.WARNING, "Failed to play sound", e)
+            logger.log(Level.WARNING, "Failed to play sound: ${soundKey.asString()}", e)
         }
     }
 

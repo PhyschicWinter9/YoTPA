@@ -4,12 +4,15 @@
 # ═══════════════════════════════════════════════════════════════
 
 # Request timeout in seconds (how long before a request expires)
+# Recommended: 30-120 seconds
 request-timeout: 60
 
 # Request cooldown in seconds (how long before sending another request)
+# Recommended: 15-60 seconds
 request-cooldown: 30
 
 # Teleport delay in seconds (countdown before actual teleport)
+# Recommended: 3-10 seconds
 teleport-delay: 5
 
 # ═══════════════════════════════════════════════════════════════
@@ -66,21 +69,23 @@ performance:
 #
 # ═══════════════════════════════════════════════════════════════
 
-# Sound effects (use Minecraft Sound enum names)
-# Format: UPPERCASE_WITH_UNDERSCORES
-# Full list: https://jd.papermc.io/paper/1.21/org/bukkit/Sound.html
+# Sound effects (use Minecraft sound names)
+# Format: lowercase with dots or underscores (no "minecraft:" prefix)
+# Examples: "block.note_block.pling", "entity.enderman.teleport"
+# Test in-game: /playsound minecraft:block.note_block.pling master @s
+# Full list: https://minecraft.wiki/w/Sounds.json
 sounds:
-  # Sound when countdown starts
-  countdown: "BLOCK_NOTE_BLOCK_PLING"
+  # Sound when countdown starts (plays every second)
+  countdown: "block.note_block.pling"
 
   # Sound when teleport succeeds
-  success: "ENTITY_ENDERMAN_TELEPORT"
+  success: "entity.enderman.teleport"
 
   # Sound when teleport is cancelled
-  cancel: "ENTITY_VILLAGER_NO"
+  cancel: "entity.villager.no"
 
   # Sound when request is received
-  request: "ENTITY_EXPERIENCE_ORB_PICKUP"
+  request: "entity.experience_orb.pickup"
 
 # ═══════════════════════════════════════════════════════════════
 #                    FEATURE TOGGLES
@@ -122,6 +127,9 @@ features:
 # 3. view-distance 10-12
 # 4. 25+ players supported
 #
-# Need help? Check /tpainfo command to see detected settings!
+# Need help? Use these commands:
+# - /tpainfo - View current performance mode and system info
+# - /tpareload - Reload configuration (validates settings)
+# - /tpastats - View teleport statistics
 #
 # ═══════════════════════════════════════════════════════════════

@@ -546,6 +546,36 @@ class YoTPA : JavaPlugin() {
         val warnings: List<String>
     )
 
+    /**
+     * Validate a sound configuration entry
+     */
+    private fun validateSoundConfig(key: String, soundName: String, warnings: MutableList<String>) {
+        if (soundName.isEmpty()) {
+            warnings.add("Sound '$key' is not set, using default")
+        } else {
+            // Validate by trying to parse the sound
+            val testKey = runCatching {
+                if (soundName.contains(".")) {
+                    // New format: "block.note_block.pling"
+                    NamespacedKey.minecraft(soundName)
+                } else {
+                    // Old format: "BLOCK_NOTE_BLOCK_PLING" -> convert
+                    val converted = soundName.lowercase().replace("_", ".")
+                    NamespacedKey.minecraft(converted)
+                }
+            }.getOrNull()
+
+            if (testKey != null) {
+                val sound = Registry.SOUNDS.get(testKey)
+                if (sound == null) {
+                    warnings.add("Sound '$key' ($soundName) not found in registry, will use default")
+                }
+            } else {
+                warnings.add("Sound '$key' ($soundName) has invalid format")
+            }
+        }
+    }
+
     private fun validateConfig(): ValidationResult {
         val errors = mutableListOf<String>()
         val warnings = mutableListOf<String>()
@@ -589,30 +619,7 @@ class YoTPA : JavaPlugin() {
             val soundKeys = listOf("countdown", "success", "cancel", "request")
             soundKeys.forEach { key ->
                 val soundName = config.getString("sounds.$key", "") ?: ""
-                if (soundName.isEmpty()) {
-                    warnings.add("Sound '$key' is not set, using default")
-                } else {
-                    // Validate by trying to parse the sound
-                    val testKey = runCatching {
-                        if (soundName.contains(".")) {
-                            // New format: "block.note_block.pling"
-                            NamespacedKey.minecraft(soundName)
-                        } else {
-                            // Old format: "BLOCK_NOTE_BLOCK_PLING" -> convert
-                            val converted = soundName.lowercase().replace("_", ".")
-                            NamespacedKey.minecraft(converted)
-                        }
-                    }.getOrNull()
-
-                    if (testKey != null) {
-                        val sound = Registry.SOUNDS.get(testKey)
-                        if (sound == null) {
-                            warnings.add("Sound '$key' ($soundName) not found in registry, will use default")
-                        }
-                    } else {
-                        warnings.add("Sound '$key' ($soundName) has invalid format")
-                    }
-                }
+                validateSoundConfig(key, soundName, warnings)
             }
 
             // Validate features
@@ -950,13 +957,10 @@ class YoTPA : JavaPlugin() {
             // Support both formats:
             // 1. New format: "block.note_block.pling" (recommended)
             // 2. Old format: "BLOCK_NOTE_BLOCK_PLING" (auto-convert)
-
             val key = if (soundName.contains(".")) {
-                // New format with dots: "block.note_block.pling"
                 NamespacedKey.minecraft(soundName)
             } else {
-                // Old format with underscores: "BLOCK_NOTE_BLOCK_PLING"
-                // Convert to: "block.note_block.pling"
+                // Convert underscores to dots and lowercase
                 val converted = soundName.lowercase().replace("_", ".")
                 NamespacedKey.minecraft(converted)
             }
@@ -968,7 +972,7 @@ class YoTPA : JavaPlugin() {
                 logger.fine("Sound '$soundName' not found in registry, using default")
                 default
             }
-        }.getOrElse {
+        }.getOrElse { _ ->
             logger.fine("Invalid sound name: $soundName, using default")
             default
         }

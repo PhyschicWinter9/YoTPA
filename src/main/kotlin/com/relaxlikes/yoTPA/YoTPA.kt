@@ -1,16 +1,15 @@
 package com.relaxlikes.yoTPA
 
 import net.kyori.adventure.text.Component
-import net.kyori.adventure.text.format.NamedTextColor
-import net.kyori.adventure.text.format.TextDecoration
 import net.kyori.adventure.title.Title
 import org.bukkit.Bukkit
+import org.bukkit.Location
 import org.bukkit.NamespacedKey
 import org.bukkit.Registry
 import org.bukkit.command.Command
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
-import org.bukkit.metadata.FixedMetadataValue
+import org.bukkit.persistence.PersistentDataType
 import org.bukkit.plugin.java.JavaPlugin
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -170,6 +169,74 @@ class YoTPA : JavaPlugin() {
         clearAllData()
 
         logger.info("YoTPA plugin has been disabled!")
+    }
+
+    /**
+     * Store player's original location in their PersistentDataContainer
+     */
+    private fun storeOriginalLocation(player: Player, location: Location) {
+        // Serialize location to string
+        val locString = "${location.world?.name},${location.x},${location.y},${location.z},${location.yaw},${location.pitch}"
+
+        player.persistentDataContainer.set(
+            originalLocationKey,
+            PersistentDataType.STRING,
+            locString
+        )
+    }
+
+    /**
+     * Get player's original location from PersistentDataContainer
+     * Returns null if not found or invalid
+     *
+     * Note: Used by PlayerMoveListener for movement detection
+     */
+    fun getOriginalLocation(player: Player): Location? {
+        val locString = player.persistentDataContainer.get(
+            originalLocationKey,
+            PersistentDataType.STRING
+        ) ?: return null
+
+        return deserializeLocation(locString)
+    }
+
+    /**
+     * Get original location by UUID
+     *
+     * Note: Used by PlayerMoveListener for movement detection
+     */
+    fun getOriginalLocation(uuid: UUID): Location? {
+        val player = Bukkit.getPlayer(uuid) ?: return null
+        return getOriginalLocation(player)
+    }
+
+    /**
+     * Remove original location from PersistentDataContainer
+     */
+    private fun removeOriginalLocation(player: Player) {
+        player.persistentDataContainer.remove(originalLocationKey)
+    }
+
+
+    /**
+     * Deserialize location from string
+     */
+    private fun deserializeLocation(locString: String): Location? {
+        return try {
+            val parts = locString.split(",")
+            val world = Bukkit.getWorld(parts[0]) ?: return null
+            Location(
+                world,
+                parts[1].toDouble(),
+                parts[2].toDouble(),
+                parts[3].toDouble(),
+                parts[4].toFloat(),
+                parts[5].toFloat()
+            )
+        } catch (_: Exception) {
+            logger.warning("Failed to deserialize location: $locString")
+            null
+        }
     }
 
     /**
@@ -687,19 +754,22 @@ class YoTPA : JavaPlugin() {
             runCatching { Bukkit.getScheduler().cancelTask(taskId) }
         }
         teleportData.remove(uuid)
-        Bukkit.getPlayer(uuid)?.removeMetadata("yotpa:original-location", this)
+
+        // Remove from PersistentDataContainer
+        Bukkit.getPlayer(uuid)?.let { player ->
+            removeOriginalLocation(player)
+        }
     }
 
     fun cancelTeleportDueToMovement(player: Player) {
         cancelTeleport(player.uniqueId)
-        sendMessage(player, Component.text("Teleportation cancelled due to movement.", NamedTextColor.RED))
+        sendMessage(player, messageManager.getTeleportCancelledMovement())
         playSound(player, cancelSoundKey)
     }
 
     private fun performTeleport(teleporter: Player, destination: Player) {
         teleporter.teleport(destination)
-        sendMessage(teleporter, Component.text("Teleported to ", NamedTextColor.GREEN)
-            .append(Component.text(destination.name, NamedTextColor.YELLOW)))
+        sendMessage(teleporter, messageManager.getTeleportSuccess(destination.name))
 
         playSound(teleporter, successSoundKey)
         playSound(destination, successSoundKey)

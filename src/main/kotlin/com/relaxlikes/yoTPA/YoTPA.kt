@@ -40,31 +40,30 @@ class YoTPA : JavaPlugin() {
     private lateinit var teleportData: ConcurrentHashMap<UUID, TeleportData>
     private lateinit var playerNameCache: ConcurrentHashMap<UUID, String>
 
+    // PersistentDataContainer key for storing original locations
+    private lateinit var originalLocationKey: NamespacedKey
+
     // Configuration values
     @Volatile private var requestTimeout = 60
     @Volatile private var requestCooldown = 30
     @Volatile private var teleportDelay = 5
 
-    // Sound keys - store as Key instead of Sound
+    // Sound keys - store as NamespacedKey instead of Sound
     @Volatile private var countdownSoundKey = NamespacedKey.minecraft("block.note_block.pling")
     @Volatile private var successSoundKey = NamespacedKey.minecraft("entity.enderman.teleport")
     @Volatile private var cancelSoundKey = NamespacedKey.minecraft("entity.villager.no")
     @Volatile private var requestSoundKey = NamespacedKey.minecraft("entity.experience_orb.pickup")
 
-    // Cached components
-    private val prefix by lazy {
-        Component.text("[", NamedTextColor.GREEN, TextDecoration.BOLD)
-            .append(Component.text("YoTPA", NamedTextColor.AQUA, TextDecoration.BOLD))
-            .append(Component.text("] ", NamedTextColor.GREEN, TextDecoration.BOLD))
-    }
+    // Cached title components
+    private val titleCache by lazy { CachedTitleComponents() }
 
     // Executor service (nullable for ultra-light mode)
     private var executor: ScheduledExecutorService? = null
 
-    // Cached title components
-    private val titleCache by lazy { CachedTitleComponents() }
-
     private lateinit var bStats: bStatsTPA
+
+    // Message manager for customizable messages
+    private lateinit var messageManager: MessageManager
 
     // Performance settings based on mode
     private data class PerformanceSettings(
@@ -96,12 +95,6 @@ class YoTPA : JavaPlugin() {
     )
 
     private data class CachedTitleComponents(
-        val mainTitle: Component = Component.text("Teleporting...")
-            .color(NamedTextColor.GREEN)
-            .decoration(TextDecoration.BOLD, true),
-        val subtitle: Component = Component.text("Don't move!")
-            .color(NamedTextColor.YELLOW)
-            .decoration(TextDecoration.BOLD, true),
         val titleTimes: Title.Times = Title.Times.times(
             java.time.Duration.ofMillis(250),
             java.time.Duration.ofSeconds(6),
@@ -110,6 +103,9 @@ class YoTPA : JavaPlugin() {
     )
 
     override fun onEnable() {
+        // Initialize PersistentDataContainer key
+        originalLocationKey = NamespacedKey(this, "original_location")
+
         // Load configuration first
         saveDefaultConfig()
         loadConfig()
@@ -122,6 +118,10 @@ class YoTPA : JavaPlugin() {
 
         // Initialize executor if needed
         initializeExecutor()
+
+        // Initialize message manager
+        messageManager = MessageManager(this)
+        messageManager.initialize()
 
         // Initialize bStats
         bStats = bStatsTPA(this)

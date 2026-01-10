@@ -160,7 +160,7 @@ YoTPA's `config.yml` file allows you to customize various aspects of the plugin:
 ## Default Configuration File
 
 ```yaml
-# YoTPA Configuration v1.3.0-Adaptive
+# YoTPA Configuration
 # Smart Auto-Optimization for All Server Sizes
 
 # Request timeout in seconds (how long before a request expires)

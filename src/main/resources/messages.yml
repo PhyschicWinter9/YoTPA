@@ -1,0 +1,167 @@
+# ═══════════════════════════════════════════════════════════════
+#                     YoTPA Messages Configuration
+#              Customize messages and prefix
+# ═══════════════════════════════════════════════════════════════
+#
+# FORMAT GUIDE:
+# - Use MiniMessage format for colors and formatting
+# - Available tags: <color>, <bold>, <italic>, <underlined>, <gradient>
+# - Colors: <red>, <green>, <yellow>, <aqua>, <gold>, etc.
+# - Example: "<green><bold>Text</bold></green>"
+#
+# PLACEHOLDERS:
+# {player}      - Player name
+# {target}      - Target player name
+# {requester}   - Requester player name
+# {seconds}     - Number of seconds
+# {timeout}     - Timeout duration
+# {cooldown}    - Cooldown duration
+# {version}     - Plugin version
+# {mode}        - Performance mode
+# {ram}         - RAM amount
+#
+# Color Reference:
+# - <black>, <dark_blue>, <dark_green>, <dark_aqua>, <dark_red>
+# - <dark_purple>, <gold>, <gray>, <dark_gray>, <blue>, <green>
+# - <aqua>, <red>, <light_purple>, <yellow>, <white>
+#
+# ═══════════════════════════════════════════════════════════════
+
+# Plugin prefix (shown before all messages)
+prefix: "<green><bold>[<aqua><bold>YoTPA</bold></aqua>]</bold></green> "
+
+# ═══════════════════════════════════════════════════════════════
+#                         COMMAND MESSAGES
+# ═══════════════════════════════════════════════════════════════
+
+commands:
+  # /tpa command
+  tpa:
+    usage: "<gray>Usage: /tpa <player></gray>"
+    sent: "<green>Teleport request sent to <yellow>{target}</yellow></green>"
+    received: "<yellow>{requester}</yellow><green> has requested to teleport to you.</green>"
+    self-teleport: "<red>You cannot teleport to yourself.</red>"
+
+  # /tpahere command
+  tpahere:
+    usage: "<yellow>Usage: /tpahere <player></yellow>"
+    sent: "<green>Teleport request sent to <yellow>{target}</yellow></green>"
+    received: "<yellow>{requester}</yellow><green> has requested you to teleport to them.</green>"
+
+  # /tpaccept command
+  tpaccept:
+    no-request: "<red>You have no pending teleport requests.</red>"
+    requester-offline: "<red>Requester is offline.</red>"
+    accepted-sender: "<green>You accepted <yellow>{requester}</yellow><green>'s teleport request.</green>"
+    accepted-target: "<yellow>{player}</yellow><green> accepted your teleport request.</green>"
+
+  # /tpadeny command
+  tpadeny:
+    no-request: "<red>You have no pending teleport requests.</red>"
+    denied-sender: "<red>You denied {requester}'s teleport request.</red>"
+    denied-target: "<red>{player} denied your teleport request.</red>"
+
+  # /tpareload command
+  tpareload:
+    no-permission: "<red>You don't have permission to reload the configuration.</red>"
+    success: "<green>Configuration reloaded successfully.</green>"
+    failed: "<red>Failed to load config.yml!</red>"
+    error: "<gray>  Error: {error}</gray>"
+    fix-syntax: "<yellow>  Fix the YAML syntax and try again.</yellow>"
+    validation-failed: "<red>Configuration validation failed!</red>"
+    warnings-header: "<yellow>Warnings:</yellow>"
+    warning-item: "<gray>  • {warning}</gray>"
+    mode-changed: "<yellow>Performance mode changed: {old_mode} → {new_mode}</yellow>"
+    restart-recommended: "<gray>Restart recommended for full effect.</gray>"
+    errors-header: "<red>Errors:</red>"
+    error-item: "<red>  ✗ {error}</red>"
+    not-applied: "<gray>Config not applied. Fix errors and try again.</gray>"
+    using-previous: "<dark_gray>Using previous configuration.</dark_gray>"
+
+  # /tpastats command
+  tpastats:
+    no-permission: "<red>You don't have permission to view statistics.</red>"
+    header: "<gold>═══ YoTPA Statistics ═══</gold>"
+    all-time: "<aqua>All-Time:</aqua>"
+    daily: "<aqua>Today:</aqua>"
+    sent: "<yellow>• Sent: <white>{sent}</white></yellow>"
+    accepted: "<green>• Accepted: <white>{accepted}</white></green>"
+    denied: "<red>• Denied: <white>{denied}</white></red>"
+    expired: "<gray>• Expired: <white>{expired}</white></gray>"
+    acceptance-rate: "<gold>• Acceptance Rate: <white>{rate}%</white></gold>"
+
+  # /tpainfo command
+  tpainfo:
+    no-permission: "<red>You don't have permission to view system info.</red>"
+    header: "<gold>═══ YoTPA System Info ═══</gold>"
+    version: "<yellow>Version: <white>{version}</white></yellow>"
+    performance-mode: "<yellow>Performance Mode: <white>{mode}</white></yellow>"
+    available-ram: "<yellow>Available RAM: <white>{ram} MB</white></yellow>"
+    max-ram: "<yellow>Max RAM: <white>{ram} MB</white></yellow>"
+    optimization: "<yellow>Optimization: <white>{level}</white></yellow>"
+    active-requests: "<yellow>Active Requests: <white>{count}</white></yellow>"
+    active-teleports: "<yellow>Active Teleports: <white>{count}</white></yellow>"
+
+# ═══════════════════════════════════════════════════════════════
+#                       TELEPORT MESSAGES
+# ═══════════════════════════════════════════════════════════════
+
+teleport:
+  # Countdown messages
+  countdown:
+    title: "<green><bold>Teleporting...</bold></green>"
+    subtitle: "<yellow><bold>Don't move!</bold></yellow>"
+    message: "<green>Teleporting in <yellow><bold>{seconds}</bold></yellow><green><bold> second{plural}</bold></green>"
+
+  # Success message
+  success: "<green>Teleported to <yellow>{target}</yellow></green>"
+
+  # Cancellation messages
+  cancelled:
+    movement: "<red>Teleportation cancelled due to movement.</red>"
+    general: "<red>Teleportation cancelled.</red>"
+
+  # Request expiration
+  expired:
+    sender: "<red>Your teleport request to {target} has expired.</red>"
+    receiver: "<red>Teleport request from {requester} has expired.</red>"
+
+# ═══════════════════════════════════════════════════════════════
+#                         ERROR MESSAGES
+# ═══════════════════════════════════════════════════════════════
+
+errors:
+  player-not-found: "<red>Player <yellow>{player}</yellow><red> not found or is offline.</red>"
+  player-only: "<red>This command can only be used by players.</red>"
+  cooldown: "<red>You need to wait <yellow>{cooldown}</yellow><red> second{plural} before sending another request.</red>"
+  no-permission: "<red>You don't have permission to use this command.</red>"
+
+# ═══════════════════════════════════════════════════════════════
+#                    ALTERNATIVE LANGUAGE EXAMPLES
+# ═══════════════════════════════════════════════════════════════
+#
+# Spanish Example:
+# prefix: "<green><bold>[<aqua><bold>YoTPA</bold></aqua>]</bold></green> "
+# commands:
+#   tpa:
+#     usage: "<gray>Uso: /tpa <jugador></gray>"
+#     sent: "<green>Solicitud de teletransporte enviada a <yellow>{target}</yellow></green>"
+#     received: "<yellow>{requester}</yellow><green> ha solicitado teletransportarse a ti.</green>"
+#
+# Thai Example:
+# prefix: "<green><bold>[<aqua><bold>YoTPA</bold></aqua>]</bold></green> "
+# commands:
+#   tpa:
+#     usage: "<gray>วิธีใช้: /tpa <ผู้เล่น></gray>"
+#     sent: "<green>ส่งคำขอเทเลพอร์ตไปยัง <yellow>{target}</yellow> แล้ว</green>"
+#     received: "<yellow>{requester}</yellow><green> ขอเทเลพอร์ตมาหาคุณ</green>"
+#
+# Japanese Example:
+# prefix: "<green><bold>[<aqua><bold>YoTPA</bold></aqua>]</bold></green> "
+# commands:
+#   tpa:
+#     usage: "<gray>使用方法: /tpa <プレイヤー></gray>"
+#     sent: "<green><yellow>{target}</yellow>にテレポートリクエストを送信しました</green>"
+#     received: "<yellow>{requester}</yellow><green>があなたの所にテレポートしたいです。</green>"
+#
+# ═══════════════════════════════════════════════════════════════

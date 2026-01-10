@@ -61,7 +61,7 @@ The plugin automatically detects your server's available RAM and optimizes itsel
 - **Multi-Threading Support** - Thread-safe for 500+ concurrent players
 - **Customizable Messages** - Fully localizable and configurable messages
 
-### 🌍 Internationalization (NEW in 1.4.0)
+### Internationalization (NEW in 1.4.0)
 
 Customize all plugin messages in any language with full MiniMessage support:
 

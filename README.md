@@ -59,6 +59,25 @@ The plugin automatically detects your server's available RAM and optimizes itsel
 - **Permission System** - Fine-grained access control
 - **Request Management** - Toggle receiving requests, cancel outgoing requests
 - **Multi-Threading Support** - Thread-safe for 500+ concurrent players
+- **Customizable Messages** - Fully localizable and configurable messages
+
+### 🌍 Internationalization (NEW in 1.4.0)
+
+Customize all plugin messages in any language with full MiniMessage support:
+
+```yaml
+prefix: "[YoTPA] "
+
+commands:
+  tpa:
+    sent: "Teleport request sent to {target}"
+    received: "{requester} wants to teleport to you."
+```
+**MiniMessage Features:**
+- Rich text formatting (bold, italic, underlined)
+- Color gradients: `<gradient:green:aqua>text</gradient>`
+- Rainbow effect: `<rainbow>text</rainbow>`
+- Hex colors: `<#FF5733>text</#FF5733>`
 
 ### Custom Sound Effects
 
@@ -96,19 +115,12 @@ Core class that contains most of the plugin logic:
 - Message formatting and customization
 - Adaptive performance optimization
 
-### PlayerMoveListener.kt
-Handles player movement detection:
-- Monitors player position changes
-- Cancels teleportation if movement detected
-- Handles edge cases like player disconnect
-- End Gateway teleport protection
-
 ## Getting Started
 
 ### Prerequisites
 
 - **Server Software:** Paper, Spigot, or any Paper/Spigot fork
-- **Minecraft Version:** 1.16.5 - 1.21.x
+- **Minecraft Version:** 1.21 - 1.21.11
 - **Java Version:** JDK 21 or higher
 - **Development:** Git, basic knowledge of Kotlin
 
@@ -194,6 +206,77 @@ features:
   titles: true
   sounds: true
 ```
+### Messages Configuration (messages.yml)
+```yaml
+# Customize your prefix
+prefix: "[YoTPA] "
+
+# All messages are customizable
+commands:
+  tpa:
+    usage: "Usage: /tpa "
+    sent: "Teleport request sent to {target}"
+    received: "{requester} wants to teleport to you."
+
+teleport:
+  countdown:
+    title: "Teleporting..."
+    subtitle: "Don't move!"
+    message: "Teleporting in {seconds} seconds"
+```
+## Customization Examples
+
+### Change Language to Spanish
+
+Edit `messages.yml`:
+```yaml
+prefix: "[YoTPA] "
+
+commands:
+  tpa:
+    usage: "Uso: /tpa "
+    sent: "Solicitud enviada a {target}"
+    received: "{requester} quiere teletransportarse a ti."
+```
+
+Then use `/tpareload` to apply changes!
+
+### Add Beautiful Gradients
+
+```yaml
+prefix: "✦ YoTPA ✦ "
+
+teleport:
+  countdown:
+    title: "Teleporting..."
+    message: "Teleporting in {seconds} seconds"
+```
+
+### Customize Colors
+
+```yaml
+prefix: "[TPA] "
+
+commands:
+  tpa:
+    sent: "Request sent to {target}"
+```
+
+### Use Hex Colors
+
+```yaml
+prefix: "[YoTPA] "
+
+teleport:
+  success: "Teleported to {target} successfully!"
+```
+
+**Placeholders:**
+- `{player}` - Player name
+- `{target}` - Target player name
+- `{requester}` - Requester player name
+- `{seconds}` - Number of seconds
+- `{cooldown}` - Cooldown duration
 
 ## Configuration Sections Explained
 

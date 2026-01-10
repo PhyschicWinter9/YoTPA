@@ -138,7 +138,7 @@ class YoTPA : JavaPlugin() {
         // Log startup info
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
-        logger.info("YoTPA Version: 1.3.0")
+        logger.info("YoTPA Version: 1.4.0")
         logger.info("Performance Mode: ${detectedMode.name}")
         logger.info("Optimization Level: ${getOptimizationLevel()}")
         logger.info("═══════════════════════════════════════")

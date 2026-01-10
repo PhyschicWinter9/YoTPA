@@ -6,9 +6,12 @@ import org.bukkit.event.Listener
 import org.bukkit.event.player.PlayerMoveEvent
 import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.event.player.PlayerTeleportEvent
-import org.bukkit.Location
 import kotlin.math.abs
 
+/**
+ * Handles player movement detection during teleport countdown
+ * Uses PersistentDataContainer (modern approach for Paper 1.21+)
+ */
 class PlayerMoveListener(
     private val plugin: YoTPA,
     private val movementThreshold: Double
@@ -27,12 +30,8 @@ class PlayerMoveListener(
 
         val player = event.player
 
-        // Quick metadata check
-        if (!player.hasMetadata("yotpa:original-location")) {
-            return
-        }
-
-        val originalLoc = player.getMetadata("yotpa:original-location")[0].value() as? Location ?: return
+        // Check if player has an active teleport using PersistentDataContainer
+        val originalLoc = plugin.getOriginalLocation(player) ?: return
 
         // Calculate distance efficiently
         // Using abs comparison avoids sqrt calculation for better performance
@@ -51,6 +50,7 @@ class PlayerMoveListener(
     @EventHandler(priority = EventPriority.MONITOR)
     fun onPlayerQuit(event: PlayerQuitEvent) {
         // Cancel any ongoing teleport when player disconnects
+        // PersistentDataContainer automatically cleans up, but we still need to cancel the task
         plugin.cancelTeleport(event.player.uniqueId)
     }
 

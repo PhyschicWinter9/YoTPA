@@ -1,16 +1,15 @@
 package com.relaxlikes.yoTPA
 
 import net.kyori.adventure.text.Component
-import net.kyori.adventure.text.format.NamedTextColor
-import net.kyori.adventure.text.format.TextDecoration
 import net.kyori.adventure.title.Title
 import org.bukkit.Bukkit
+import org.bukkit.Location
 import org.bukkit.NamespacedKey
 import org.bukkit.Registry
 import org.bukkit.command.Command
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
-import org.bukkit.metadata.FixedMetadataValue
+import org.bukkit.persistence.PersistentDataType
 import org.bukkit.plugin.java.JavaPlugin
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -20,6 +19,11 @@ import java.util.concurrent.TimeUnit
 import java.util.logging.Level
 
 class YoTPA : JavaPlugin() {
+
+    // Version
+    companion object {
+        const val VERSION = "1.4.0"
+    }
 
     // Performance mode enum
     enum class PerformanceMode {
@@ -41,31 +45,30 @@ class YoTPA : JavaPlugin() {
     private lateinit var teleportData: ConcurrentHashMap<UUID, TeleportData>
     private lateinit var playerNameCache: ConcurrentHashMap<UUID, String>
 
+    // PersistentDataContainer key for storing original locations
+    private lateinit var originalLocationKey: NamespacedKey
+
     // Configuration values
     @Volatile private var requestTimeout = 60
     @Volatile private var requestCooldown = 30
     @Volatile private var teleportDelay = 5
 
-    // Sound keys - store as Key instead of Sound
+    // Sound keys - store as NamespacedKey instead of Sound
     @Volatile private var countdownSoundKey = NamespacedKey.minecraft("block.note_block.pling")
     @Volatile private var successSoundKey = NamespacedKey.minecraft("entity.enderman.teleport")
     @Volatile private var cancelSoundKey = NamespacedKey.minecraft("entity.villager.no")
     @Volatile private var requestSoundKey = NamespacedKey.minecraft("entity.experience_orb.pickup")
 
-    // Cached components
-    private val prefix by lazy {
-        Component.text("[", NamedTextColor.GREEN, TextDecoration.BOLD)
-            .append(Component.text("YoTPA", NamedTextColor.AQUA, TextDecoration.BOLD))
-            .append(Component.text("] ", NamedTextColor.GREEN, TextDecoration.BOLD))
-    }
+    // Cached title components
+    private val titleCache by lazy { CachedTitleComponents() }
 
     // Executor service (nullable for ultra-light mode)
     private var executor: ScheduledExecutorService? = null
 
-    // Cached title components
-    private val titleCache by lazy { CachedTitleComponents() }
-
     private lateinit var bStats: bStatsTPA
+
+    // Message manager for customizable messages
+    private lateinit var messageManager: MessageManager
 
     // Performance settings based on mode
     private data class PerformanceSettings(
@@ -97,12 +100,6 @@ class YoTPA : JavaPlugin() {
     )
 
     private data class CachedTitleComponents(
-        val mainTitle: Component = Component.text("Teleporting...")
-            .color(NamedTextColor.GREEN)
-            .decoration(TextDecoration.BOLD, true),
-        val subtitle: Component = Component.text("Don't move!")
-            .color(NamedTextColor.YELLOW)
-            .decoration(TextDecoration.BOLD, true),
         val titleTimes: Title.Times = Title.Times.times(
             java.time.Duration.ofMillis(250),
             java.time.Duration.ofSeconds(6),
@@ -111,6 +108,9 @@ class YoTPA : JavaPlugin() {
     )
 
     override fun onEnable() {
+        // Initialize PersistentDataContainer key
+        originalLocationKey = NamespacedKey(this, "original_location")
+
         // Load configuration first
         saveDefaultConfig()
         loadConfig()
@@ -123,6 +123,10 @@ class YoTPA : JavaPlugin() {
 
         // Initialize executor if needed
         initializeExecutor()
+
+        // Initialize message manager
+        messageManager = MessageManager(this)
+        messageManager.initialize()
 
         // Initialize bStats
         bStats = bStatsTPA(this)
@@ -138,7 +142,7 @@ class YoTPA : JavaPlugin() {
         // Log startup info
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
-        logger.info("YoTPA Version: 1.3.0")
+        logger.info("YoTPA Version: $VERSION")
         logger.info("Performance Mode: ${detectedMode.name}")
         logger.info("Optimization Level: ${getOptimizationLevel()}")
         logger.info("═══════════════════════════════════════")
@@ -170,6 +174,74 @@ class YoTPA : JavaPlugin() {
         clearAllData()
 
         logger.info("YoTPA plugin has been disabled!")
+    }
+
+    /**
+     * Store player's original location in their PersistentDataContainer
+     */
+    private fun storeOriginalLocation(player: Player, location: Location) {
+        // Serialize location to string
+        val locString = "${location.world?.name},${location.x},${location.y},${location.z},${location.yaw},${location.pitch}"
+
+        player.persistentDataContainer.set(
+            originalLocationKey,
+            PersistentDataType.STRING,
+            locString
+        )
+    }
+
+    /**
+     * Get player's original location from PersistentDataContainer
+     * Returns null if not found or invalid
+     *
+     * Note: Used by PlayerMoveListener for movement detection
+     */
+    fun getOriginalLocation(player: Player): Location? {
+        val locString = player.persistentDataContainer.get(
+            originalLocationKey,
+            PersistentDataType.STRING
+        ) ?: return null
+
+        return deserializeLocation(locString)
+    }
+
+    /**
+     * Get original location by UUID
+     *
+     * Note: Used by PlayerMoveListener for movement detection
+     */
+    fun getOriginalLocation(uuid: UUID): Location? {
+        val player = Bukkit.getPlayer(uuid) ?: return null
+        return getOriginalLocation(player)
+    }
+
+    /**
+     * Remove original location from PersistentDataContainer
+     */
+    private fun removeOriginalLocation(player: Player) {
+        player.persistentDataContainer.remove(originalLocationKey)
+    }
+
+
+    /**
+     * Deserialize location from string
+     */
+    private fun deserializeLocation(locString: String): Location? {
+        return try {
+            val parts = locString.split(",")
+            val world = Bukkit.getWorld(parts[0]) ?: return null
+            Location(
+                world,
+                parts[1].toDouble(),
+                parts[2].toDouble(),
+                parts[3].toDouble(),
+                parts[4].toFloat(),
+                parts[5].toFloat()
+            )
+        } catch (_: Exception) {
+            logger.warning("Failed to deserialize location: $locString")
+            null
+        }
     }
 
     /**
@@ -303,7 +375,7 @@ class YoTPA : JavaPlugin() {
 
     override fun onCommand(sender: CommandSender, command: Command, label: String, args: Array<out String>): Boolean {
         if (sender !is Player) {
-            sendMessage(sender, Component.text("This command can only be used by players.", NamedTextColor.RED))
+            sendMessage(sender, messageManager.getPlayerOnly())
             return true
         }
 
@@ -321,13 +393,13 @@ class YoTPA : JavaPlugin() {
 
     private fun handleTpaCommand(player: Player, args: Array<out String>) {
         if (args.isEmpty()) {
-            sendMessage(player, Component.text("Usage: /tpa <player>", NamedTextColor.GRAY))
+            sendMessage(player, messageManager.getTpaUsage())
             return
         }
 
         val target = getPlayerByName(args[0])
         if (target == null) {
-            sendMessage(player, buildPlayerNotFoundMessage(args[0]))
+            sendMessage(player, messageManager.getPlayerNotFound(args[0]))
             return
         }
 
@@ -336,20 +408,21 @@ class YoTPA : JavaPlugin() {
         storeRequest(player, target, false)
         updateCooldown(player)
 
-        sendTpaRequestMessages(player, target)
+        sendMessage(player, messageManager.getTpaSent(target.name))
+        sendMessage(target, messageManager.getTpaReceived(player.name))
         playSound(target, requestSoundKey)
         bStats.incrementRequestSent()
     }
 
     private fun handleTpaHereCommand(player: Player, args: Array<out String>) {
         if (args.isEmpty()) {
-            sendMessage(player, Component.text("Usage: /tpahere <player>", NamedTextColor.YELLOW))
+            sendMessage(player, messageManager.getTpaHereUsage())
             return
         }
 
         val target = getPlayerByName(args[0])
         if (target == null) {
-            sendMessage(player, buildPlayerNotFoundMessage(args[0]))
+            sendMessage(player, messageManager.getPlayerNotFound(args[0]))
             return
         }
 
@@ -358,7 +431,8 @@ class YoTPA : JavaPlugin() {
         storeRequest(player, target, true)
         updateCooldown(player)
 
-        sendTpaHereRequestMessages(player, target)
+        sendMessage(player, messageManager.getTpaHereSent(target.name))
+        sendMessage(target, messageManager.getTpaHereReceived(player.name))
         playSound(target, requestSoundKey)
         bStats.incrementRequestSent()
     }
@@ -366,13 +440,13 @@ class YoTPA : JavaPlugin() {
     private fun handleTpAcceptCommand(player: Player) {
         val request = tpaRequests.remove(player.uniqueId)
         if (request == null) {
-            sendMessage(player, Component.text("You have no pending teleport requests.", NamedTextColor.RED))
+            sendMessage(player, messageManager.getTpAcceptNoRequest())
             return
         }
 
         val requester = Bukkit.getPlayer(request.requesterUUID)
         if (requester == null || !requester.isOnline) {
-            sendMessage(player, Component.text("Requester is offline.", NamedTextColor.RED))
+            sendMessage(player, messageManager.getTpAcceptRequesterOffline())
             return
         }
 
@@ -382,7 +456,8 @@ class YoTPA : JavaPlugin() {
             requester to player
         }
 
-        sendAcceptanceMessages(player, requester)
+        sendMessage(player, messageManager.getTpAcceptAcceptedSender(requester.name))
+        sendMessage(requester, messageManager.getTpAcceptAcceptedTarget(player.name))
         startTeleportCountdown(teleporter, destination)
         bStats.incrementRequestAccepted()
     }
@@ -390,16 +465,16 @@ class YoTPA : JavaPlugin() {
     private fun handleTpDenyCommand(player: Player) {
         val request = tpaRequests.remove(player.uniqueId)
         if (request == null) {
-            sendMessage(player, Component.text("You have no pending teleport requests.", NamedTextColor.RED))
+            sendMessage(player, messageManager.getTpDenyNoRequest())
             return
         }
 
         val requester = Bukkit.getPlayer(request.requesterUUID)
         val requesterName = requester?.name ?: getPlayerName(request.requesterUUID)
 
-        sendMessage(player, Component.text("You denied $requesterName's teleport request.", NamedTextColor.RED))
+        sendMessage(player, messageManager.getTpDenyDeniedSender(requesterName))
         requester?.let {
-            sendMessage(it, Component.text("${player.name} denied your teleport request.", NamedTextColor.RED))
+            sendMessage(it, messageManager.getTpDenyDeniedTarget(player.name))
             playSound(it, cancelSoundKey)
         }
 
@@ -409,18 +484,19 @@ class YoTPA : JavaPlugin() {
 
     private fun handleReloadCommand(player: Player) {
         if (!player.hasPermission("yotpa.reload")) {
-            sendMessage(player, Component.text("You don't have permission to reload the configuration.", NamedTextColor.RED))
+            sendMessage(player, messageManager.getTpaReloadNoPermission())
             return
         }
 
         // Try to reload config first (catch YAML errors)
         val reloadResult = runCatching {
             reloadConfig()
+            messageManager.reload()
             true
         }.getOrElse { e ->
-            sendMessage(player, Component.text("Failed to load config.yml!", NamedTextColor.RED))
-            player.sendMessage(Component.text("  Error: ${e.message}", NamedTextColor.GRAY))
-            player.sendMessage(Component.text("  Fix the YAML syntax and try again.", NamedTextColor.YELLOW))
+            sendMessage(player, messageManager.getTpaReloadFailed())
+            player.sendMessage(messageManager.getTpaReloadError(e.message ?: "Unknown error"))
+            player.sendMessage(messageManager.getTpaReloadFixSyntax())
             logger.log(Level.SEVERE, "Failed to reload config", e)
             false
         }
@@ -438,34 +514,34 @@ class YoTPA : JavaPlugin() {
             val oldMode = detectedMode
             detectAndApplyPerformanceMode()
 
-            sendMessage(player, Component.text("Configuration reloaded successfully.", NamedTextColor.GREEN))
+            sendMessage(player, messageManager.getTpaReloadSuccess())
 
             if (validationResult.warnings.isNotEmpty()) {
-                sendMessage(player, Component.text("Warnings:", NamedTextColor.YELLOW))
+                sendMessage(player, messageManager.getTpaReloadWarningsHeader())
                 validationResult.warnings.forEach { warning ->
-                    player.sendMessage(Component.text("  • $warning", NamedTextColor.GRAY))
+                    player.sendMessage(messageManager.getTpaReloadWarningItem(warning))
                 }
             }
 
             if (oldMode != detectedMode) {
-                sendMessage(player, Component.text("Performance mode changed: $oldMode → $detectedMode", NamedTextColor.YELLOW))
-                sendMessage(player, Component.text("Restart recommended for full effect.", NamedTextColor.GRAY))
+                sendMessage(player, messageManager.getTpaReloadModeChanged(oldMode.name, detectedMode.name))
+                sendMessage(player, messageManager.getTpaReloadRestartRecommended())
             }
         } else {
-            sendMessage(player, Component.text("Configuration validation failed!", NamedTextColor.RED))
+            sendMessage(player, messageManager.getTpaReloadValidationFailed())
             validationResult.errors.forEach { error ->
-                player.sendMessage(Component.text("  ✗ $error", NamedTextColor.RED))
+                player.sendMessage(messageManager.getTpaReloadErrorItem(error))
             }
 
             if (validationResult.warnings.isNotEmpty()) {
-                sendMessage(player, Component.text("Warnings:", NamedTextColor.YELLOW))
+                sendMessage(player, messageManager.getTpaReloadWarningsHeader())
                 validationResult.warnings.forEach { warning ->
-                    player.sendMessage(Component.text("  • $warning", NamedTextColor.GRAY))
+                    player.sendMessage(messageManager.getTpaReloadWarningItem(warning))
                 }
             }
 
-            sendMessage(player, Component.text("Config not applied. Fix errors and try again.", NamedTextColor.GRAY))
-            sendMessage(player, Component.text("Using previous configuration.", NamedTextColor.DARK_GRAY))
+            sendMessage(player, messageManager.getTpaReloadNotApplied())
+            sendMessage(player, messageManager.getTpaReloadUsingPrevious())
         }
     }
 
@@ -474,6 +550,36 @@ class YoTPA : JavaPlugin() {
         val errors: List<String>,
         val warnings: List<String>
     )
+
+    /**
+     * Validate a sound configuration entry
+     */
+    private fun validateSoundConfig(key: String, soundName: String, warnings: MutableList<String>) {
+        if (soundName.isEmpty()) {
+            warnings.add("Sound '$key' is not set, using default")
+        } else {
+            // Validate by trying to parse the sound
+            val testKey = runCatching {
+                if (soundName.contains(".")) {
+                    // New format: "block.note_block.pling"
+                    NamespacedKey.minecraft(soundName)
+                } else {
+                    // Old format: "BLOCK_NOTE_BLOCK_PLING" -> convert
+                    val converted = soundName.lowercase().replace("_", ".")
+                    NamespacedKey.minecraft(converted)
+                }
+            }.getOrNull()
+
+            if (testKey != null) {
+                val sound = Registry.SOUNDS.get(testKey)
+                if (sound == null) {
+                    warnings.add("Sound '$key' ($soundName) not found in registry, will use default")
+                }
+            } else {
+                warnings.add("Sound '$key' ($soundName) has invalid format")
+            }
+        }
+    }
 
     private fun validateConfig(): ValidationResult {
         val errors = mutableListOf<String>()
@@ -518,30 +624,7 @@ class YoTPA : JavaPlugin() {
             val soundKeys = listOf("countdown", "success", "cancel", "request")
             soundKeys.forEach { key ->
                 val soundName = config.getString("sounds.$key", "") ?: ""
-                if (soundName.isEmpty()) {
-                    warnings.add("Sound '$key' is not set, using default")
-                } else {
-                    // Validate by trying to parse the sound
-                    val testKey = runCatching {
-                        if (soundName.contains(".")) {
-                            // New format: "block.note_block.pling"
-                            NamespacedKey.minecraft(soundName)
-                        } else {
-                            // Old format: "BLOCK_NOTE_BLOCK_PLING" -> convert
-                            val converted = soundName.lowercase().replace("_", ".")
-                            NamespacedKey.minecraft(converted)
-                        }
-                    }.getOrNull()
-
-                    if (testKey != null) {
-                        val sound = Registry.SOUNDS.get(testKey)
-                        if (sound == null) {
-                            warnings.add("Sound '$key' ($soundName) not found in registry, will use default")
-                        }
-                    } else {
-                        warnings.add("Sound '$key' ($soundName) has invalid format")
-                    }
-                }
+                validateSoundConfig(key, soundName, warnings)
             }
 
             // Validate features
@@ -566,67 +649,55 @@ class YoTPA : JavaPlugin() {
 
     private fun handleStatsCommand(player: Player) {
         if (!player.hasPermission("yotpa.stats")) {
-            sendMessage(player, Component.text("You don't have permission to view statistics.", NamedTextColor.RED))
+            sendMessage(player, messageManager.getTpaStatsNoPermission())
             return
         }
 
         val stats = bStats.getStatistics()
         val acceptanceRate = bStats.getAcceptanceRate()
 
-        player.sendMessage(Component.text("═══ YoTPA Statistics ═══", NamedTextColor.GOLD))
+        player.sendMessage(messageManager.getTpaStatsHeader())
 
         stats["All-Time"]?.let { allTimeStats ->
-            player.sendMessage(Component.text("All-Time:", NamedTextColor.AQUA))
-            displayStats(player, allTimeStats)
-            player.sendMessage(Component.text("• Acceptance Rate: ", NamedTextColor.GOLD)
-                .append(Component.text("$acceptanceRate%", NamedTextColor.WHITE)))
+            player.sendMessage(messageManager.getTpaStatsAllTime())
+            player.sendMessage(messageManager.getTpaStatsSent(allTimeStats["Sent"].toString()))
+            player.sendMessage(messageManager.getTpaStatsAccepted(allTimeStats["Accepted"].toString()))
+            player.sendMessage(messageManager.getTpaStatsDenied(allTimeStats["Denied"].toString()))
+            player.sendMessage(messageManager.getTpaStatsExpired(allTimeStats["Expired"].toString()))
+            player.sendMessage(messageManager.getTpaStatsAcceptanceRate(acceptanceRate.toString()))
         }
 
         stats["Daily"]?.let { dailyStats ->
-            player.sendMessage(Component.text("Today:", NamedTextColor.AQUA))
-            displayStats(player, dailyStats)
+            player.sendMessage(messageManager.getTpaStatsDaily())
+            player.sendMessage(messageManager.getTpaStatsSent(dailyStats["Sent"].toString()))
+            player.sendMessage(messageManager.getTpaStatsAccepted(dailyStats["Accepted"].toString()))
+            player.sendMessage(messageManager.getTpaStatsDenied(dailyStats["Denied"].toString()))
+            player.sendMessage(messageManager.getTpaStatsExpired(dailyStats["Expired"].toString()))
         }
     }
 
     private fun handleInfoCommand(player: Player) {
         if (!player.hasPermission("yotpa.info")) {
-            sendMessage(player, Component.text("You don't have permission to view system info.", NamedTextColor.RED))
+            sendMessage(player, messageManager.getTpaInfoNoPermission())
             return
         }
 
-        player.sendMessage(Component.text("═══ YoTPA System Info ═══", NamedTextColor.GOLD))
-        player.sendMessage(Component.text("Version: ", NamedTextColor.YELLOW)
-            .append(Component.text("1.3.0", NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("Performance Mode: ", NamedTextColor.YELLOW)
-            .append(Component.text(detectedMode.name, NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("Available RAM: ", NamedTextColor.YELLOW)
-            .append(Component.text("${getAvailableMemoryMB()} MB", NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("Max RAM: ", NamedTextColor.YELLOW)
-            .append(Component.text("${getMaxMemoryMB()} MB", NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("Optimization: ", NamedTextColor.YELLOW)
-            .append(Component.text(getOptimizationLevel(), NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("Active Requests: ", NamedTextColor.YELLOW)
-            .append(Component.text(tpaRequests.size.toString(), NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("Active Teleports: ", NamedTextColor.YELLOW)
-            .append(Component.text(teleportTasks.size.toString(), NamedTextColor.WHITE)))
-    }
-
-    private fun displayStats(player: Player, stats: Map<String, Any>) {
-        player.sendMessage(Component.text("• Sent: ", NamedTextColor.YELLOW)
-            .append(Component.text(stats["Sent"].toString(), NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Accepted: ", NamedTextColor.GREEN)
-            .append(Component.text(stats["Accepted"].toString(), NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Denied: ", NamedTextColor.RED)
-            .append(Component.text(stats["Denied"].toString(), NamedTextColor.WHITE)))
-        player.sendMessage(Component.text("• Expired: ", NamedTextColor.GRAY)
-            .append(Component.text(stats["Expired"].toString(), NamedTextColor.WHITE)))
+        player.sendMessage(messageManager.getTpaInfoHeader())
+        player.sendMessage(messageManager.getTpaInfoVersion(VERSION))
+        player.sendMessage(messageManager.getTpaInfoPerformanceMode(detectedMode.name))
+        player.sendMessage(messageManager.getTpaInfoAvailableRam(getAvailableMemoryMB().toString()))
+        player.sendMessage(messageManager.getTpaInfoMaxRam(getMaxMemoryMB().toString()))
+        player.sendMessage(messageManager.getTpaInfoOptimization(getOptimizationLevel()))
+        player.sendMessage(messageManager.getTpaInfoActiveRequests(tpaRequests.size.toString()))
+        player.sendMessage(messageManager.getTpaInfoActiveTeleports(teleportTasks.size.toString()))
     }
 
     fun startTeleportCountdown(teleporter: Player, destination: Player) {
         cancelTeleport(teleporter.uniqueId)
 
+        // Store original location in PersistentDataContainer
         val originalLocation = teleporter.location.clone()
-        teleporter.setMetadata("yotpa:original-location", FixedMetadataValue(this, originalLocation))
+        storeOriginalLocation(teleporter, originalLocation)
 
         val settings = getPerformanceSettings()
         val data = TeleportData(
@@ -642,8 +713,8 @@ class YoTPA : JavaPlugin() {
 
         // Show title
         teleporter.showTitle(Title.title(
-            titleCache.mainTitle,
-            titleCache.subtitle,
+            messageManager.getTeleportTitle(),
+            messageManager.getTeleportSubtitle(),
             titleCache.titleTimes
         ))
 
@@ -677,9 +748,7 @@ class YoTPA : JavaPlugin() {
     }
 
     private fun sendCountdownMessage(player: Player, seconds: Int) {
-        sendMessage(player, Component.text("Teleporting in ", NamedTextColor.GREEN)
-            .append(Component.text(seconds.toString(), NamedTextColor.YELLOW, TextDecoration.BOLD))
-            .append(Component.text(" second${if (seconds != 1) "s" else ""}", NamedTextColor.GREEN, TextDecoration.BOLD)))
+        sendMessage(player, messageManager.getTeleportCountdownMessage(seconds))
     }
 
     fun cancelTeleport(uuid: UUID) {
@@ -687,19 +756,22 @@ class YoTPA : JavaPlugin() {
             runCatching { Bukkit.getScheduler().cancelTask(taskId) }
         }
         teleportData.remove(uuid)
-        Bukkit.getPlayer(uuid)?.removeMetadata("yotpa:original-location", this)
+
+        // Remove from PersistentDataContainer
+        Bukkit.getPlayer(uuid)?.let { player ->
+            removeOriginalLocation(player)
+        }
     }
 
     fun cancelTeleportDueToMovement(player: Player) {
         cancelTeleport(player.uniqueId)
-        sendMessage(player, Component.text("Teleportation cancelled due to movement.", NamedTextColor.RED))
+        sendMessage(player, messageManager.getTeleportCancelledMovement())
         playSound(player, cancelSoundKey)
     }
 
     private fun performTeleport(teleporter: Player, destination: Player) {
         teleporter.teleport(destination)
-        sendMessage(teleporter, Component.text("Teleported to ", NamedTextColor.GREEN)
-            .append(Component.text(destination.name, NamedTextColor.YELLOW)))
+        sendMessage(teleporter, messageManager.getTeleportSuccess(destination.name))
 
         playSound(teleporter, successSoundKey)
         playSound(destination, successSoundKey)
@@ -755,11 +827,11 @@ class YoTPA : JavaPlugin() {
         expiredRequests.forEach { targetUuid ->
             tpaRequests.remove(targetUuid)?.let { request ->
                 Bukkit.getPlayer(targetUuid)?.let { target ->
-                    sendMessage(target, Component.text("Teleport request from ${getPlayerName(request.requesterUUID)} has expired.", NamedTextColor.RED))
+                    sendMessage(target, messageManager.getTeleportExpiredReceiver(getPlayerName(request.requesterUUID)))
                 }
 
                 Bukkit.getPlayer(request.requesterUUID)?.let { requester ->
-                    sendMessage(requester, Component.text("Your teleport request to ${getPlayerName(targetUuid)} has expired.", NamedTextColor.RED))
+                    sendMessage(requester, messageManager.getTeleportExpiredSender(getPlayerName(targetUuid)))
                 }
 
                 bStats.incrementRequestExpired()
@@ -804,12 +876,13 @@ class YoTPA : JavaPlugin() {
 
     private fun validateTeleportRequest(requester: Player, target: Player): Boolean {
         if (target.uniqueId == requester.uniqueId) {
-            sendMessage(requester, Component.text("You cannot teleport to yourself.", NamedTextColor.RED))
+            sendMessage(requester, messageManager.getTpaSelfTeleport())
             return false
         }
 
         if (isOnCooldown(requester) && !requester.hasPermission("yotpa.bypass.cooldown")) {
-            sendCooldownMessage(requester)
+            val remainingCooldown = ((cooldowns[requester.uniqueId]!! + (requestCooldown * 1000L)) - System.currentTimeMillis()) / 1000
+            sendMessage(requester, messageManager.getCooldown(remainingCooldown))
             return false
         }
 
@@ -863,19 +936,19 @@ class YoTPA : JavaPlugin() {
     private fun loadSounds() {
         runCatching {
             countdownSoundKey = parseSoundKey(
-                config.getString("sounds.countdown", "block.note_block.pling")!!,
+                config.getString("sounds.countdown") ?: "block.note_block.pling",
                 NamespacedKey.minecraft("block.note_block.pling")
             )
             successSoundKey = parseSoundKey(
-                config.getString("sounds.success", "entity.enderman.teleport")!!,
+                config.getString("sounds.success") ?: "entity.enderman.teleport",
                 NamespacedKey.minecraft("entity.enderman.teleport")
             )
             cancelSoundKey = parseSoundKey(
-                config.getString("sounds.cancel", "entity.villager.no")!!,
+                config.getString("sounds.cancel") ?: "entity.villager.no",
                 NamespacedKey.minecraft("entity.villager.no")
             )
             requestSoundKey = parseSoundKey(
-                config.getString("sounds.request", "entity.experience_orb.pickup")!!,
+                config.getString("sounds.request") ?: "entity.experience_orb.pickup",
                 NamespacedKey.minecraft("entity.experience_orb.pickup")
             )
         }.onFailure { e ->
@@ -889,13 +962,10 @@ class YoTPA : JavaPlugin() {
             // Support both formats:
             // 1. New format: "block.note_block.pling" (recommended)
             // 2. Old format: "BLOCK_NOTE_BLOCK_PLING" (auto-convert)
-
             val key = if (soundName.contains(".")) {
-                // New format with dots: "block.note_block.pling"
                 NamespacedKey.minecraft(soundName)
             } else {
-                // Old format with underscores: "BLOCK_NOTE_BLOCK_PLING"
-                // Convert to: "block.note_block.pling"
+                // Convert underscores to dots and lowercase
                 val converted = soundName.lowercase().replace("_", ".")
                 NamespacedKey.minecraft(converted)
             }
@@ -907,7 +977,7 @@ class YoTPA : JavaPlugin() {
                 logger.fine("Sound '$soundName' not found in registry, using default")
                 default
             }
-        }.getOrElse {
+        }.getOrElse { _ ->
             logger.fine("Invalid sound name: $soundName, using default")
             default
         }
@@ -921,45 +991,7 @@ class YoTPA : JavaPlugin() {
     }
 
     private fun sendMessage(sender: CommandSender, message: Component) {
-        sender.sendMessage(prefix.append(message))
-    }
-
-    private fun buildPlayerNotFoundMessage(playerName: String): Component {
-        return Component.text("Player ", NamedTextColor.RED)
-            .append(Component.text(playerName, NamedTextColor.YELLOW))
-            .append(Component.text(" not found or is offline.", NamedTextColor.RED))
-    }
-
-    private fun sendCooldownMessage(player: Player) {
-        val remainingCooldown = ((cooldowns[player.uniqueId]!! + (requestCooldown * 1000L)) - System.currentTimeMillis()) / 1000
-        sendMessage(player, Component.text("You need to wait ", NamedTextColor.RED)
-            .append(Component.text("$remainingCooldown ", NamedTextColor.YELLOW))
-            .append(Component.text("second${if (remainingCooldown != 1L) "s" else ""} before sending another request.", NamedTextColor.RED)))
-    }
-
-    private fun sendTpaRequestMessages(requester: Player, target: Player) {
-        sendMessage(requester, Component.text("Teleport request sent to ", NamedTextColor.GREEN)
-            .append(Component.text(target.name, NamedTextColor.YELLOW)))
-
-        sendMessage(target, Component.text(requester.name, NamedTextColor.YELLOW)
-            .append(Component.text(" has requested to teleport to you.", NamedTextColor.GREEN)))
-    }
-
-    private fun sendTpaHereRequestMessages(requester: Player, target: Player) {
-        sendMessage(requester, Component.text("Teleport request sent to ", NamedTextColor.GREEN)
-            .append(Component.text(target.name, NamedTextColor.YELLOW)))
-
-        sendMessage(target, Component.text(requester.name, NamedTextColor.YELLOW)
-            .append(Component.text(" has requested you to teleport to them.", NamedTextColor.GREEN)))
-    }
-
-    private fun sendAcceptanceMessages(accepter: Player, requester: Player) {
-        sendMessage(accepter, Component.text("You accepted ", NamedTextColor.GREEN)
-            .append(Component.text(requester.name, NamedTextColor.YELLOW))
-            .append(Component.text("'s teleport request.", NamedTextColor.GREEN)))
-
-        sendMessage(requester, Component.text(accepter.name, NamedTextColor.YELLOW)
-            .append(Component.text(" accepted your teleport request.", NamedTextColor.GREEN)))
+        sender.sendMessage(message)
     }
 
     private fun playSound(player: Player, soundKey: NamespacedKey) {

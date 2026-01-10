@@ -20,6 +20,11 @@ import java.util.logging.Level
 
 class YoTPA : JavaPlugin() {
 
+    // Version
+    companion object {
+        const val VERSION = "1.4.0"
+    }
+
     // Performance mode enum
     enum class PerformanceMode {
         AUTO,           // Auto-detect based on available RAM
@@ -137,7 +142,7 @@ class YoTPA : JavaPlugin() {
         // Log startup info
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
-        logger.info("YoTPA Version: 1.4.0")
+        logger.info("YoTPA Version: $VERSION")
         logger.info("Performance Mode: ${detectedMode.name}")
         logger.info("Optimization Level: ${getOptimizationLevel()}")
         logger.info("═══════════════════════════════════════")
@@ -678,7 +683,7 @@ class YoTPA : JavaPlugin() {
         }
 
         player.sendMessage(messageManager.getTpaInfoHeader())
-        player.sendMessage(messageManager.getTpaInfoVersion("1.4.0"))
+        player.sendMessage(messageManager.getTpaInfoVersion(VERSION))
         player.sendMessage(messageManager.getTpaInfoPerformanceMode(detectedMode.name))
         player.sendMessage(messageManager.getTpaInfoAvailableRam(getAvailableMemoryMB().toString()))
         player.sendMessage(messageManager.getTpaInfoMaxRam(getMaxMemoryMB().toString()))

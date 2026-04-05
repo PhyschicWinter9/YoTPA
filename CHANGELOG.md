@@ -9,21 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.0] - 2026-04-05
 
-### 🎉 Major Update - Multi-Version Support & JDK 25
+### 🎉 Major Update - Multi-Version Support, JDK 25 & Update Checker
 
 ### Added
 
-#### Multi-Version Compatibility
+#### Update Checker
+- **Automatic update notifications** - Plugin checks for new releases on startup via GitHub Releases API
+- **Console alert** - Logs update banner with download link when a newer version is found
+- **In-game notification** - OPs and players with `yotpa.admin` permission receive a clickable chat message on join
+- **Modrinth download link** - Notification links directly to [modrinth.com/plugin/yotpa](https://modrinth.com/plugin/yotpa)
+- **Async check** - Network request runs off the main thread, no server tick impact
+- **Graceful failure** - Network errors are caught and logged as warnings without affecting startup
+
+#### Version Compatibility
 - **Minecraft 1.21.x – 26.1.x support** - Single JAR now runs on servers from 1.21 through Paper 26.1
 - **JDK 25 development toolchain** - Project upgraded to compile with JDK 25 while targeting Java 21 bytecode for backwards compatibility
 
 ### Changed
 
 #### Build & Toolchain
+- **Centralized version management** - `VersionConfig.PLUGIN_VERSION` in `build.gradle.kts` is the single source of truth for the plugin version
 - **Kotlin upgraded to 2.3.0** - Required for proper JDK 25 toolchain support
 - **JVM toolchain set to JDK 25** - Development now uses JDK 25
 - **Bytecode target stays at Java 21** - Ensures the plugin runs on both 1.21.x (Java 21) and 26.1.x (Java 25) servers
 - **Explicit `options.release = 21`** - Java compilation also locked to Java 21 output
+
 
 ### 📦 Technical Details
 
@@ -34,8 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kotlin version: 2.3.0
 - JVM bytecode target: Java 21
 
+#### New Files
+- `UpdateChecker.kt` - Async update checking and OP notification system
+
 #### Build Configuration
 ```kotlin
+object VersionConfig {
+    const val PLUGIN_VERSION = "1.5.0"
+}
+
 kotlin {
     jvmToolchain(25)
     compilerOptions {

@@ -20,10 +20,8 @@ import java.util.logging.Level
 
 class YoTPA : JavaPlugin() {
 
-    // Version
-    companion object {
-        const val VERSION = "1.5.0"
-    }
+    // Version is read from plugin.yml at runtime (injected by processResources from VersionConfig.PLUGIN_pluginVersion)
+    val pluginVersion: String get() = pluginMeta.version
 
     // Performance mode enum
     enum class PerformanceMode {
@@ -69,6 +67,9 @@ class YoTPA : JavaPlugin() {
 
     // Message manager for customizable messages
     private lateinit var messageManager: MessageManager
+
+    // Update checker
+    private lateinit var updateChecker: UpdateChecker
 
     // Performance settings based on mode
     private data class PerformanceSettings(
@@ -132,9 +133,14 @@ class YoTPA : JavaPlugin() {
         bStats = bStatsTPA(this)
         bStats.initialize()
 
+        // Initialize update checker
+        updateChecker = UpdateChecker(this, pluginVersion, "PhyschicWinter9/YoTPA")
+        updateChecker.check()
+
         // Register commands and events
         registerCommands()
         server.pluginManager.registerEvents(PlayerMoveListener(this, getMovementThreshold()), this)
+        server.pluginManager.registerEvents(updateChecker, this)
 
         // Start maintenance tasks
         startMaintenanceTasks()
@@ -142,7 +148,7 @@ class YoTPA : JavaPlugin() {
         // Log startup info
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
-        logger.info("YoTPA Version: $VERSION")
+        logger.info("YoTPA Version: $pluginVersion")
         logger.info("Performance Mode: ${detectedMode.name}")
         logger.info("Optimization Level: ${getOptimizationLevel()}")
         logger.info("═══════════════════════════════════════")
@@ -683,7 +689,7 @@ class YoTPA : JavaPlugin() {
         }
 
         player.sendMessage(messageManager.getTpaInfoHeader())
-        player.sendMessage(messageManager.getTpaInfoVersion(VERSION))
+        player.sendMessage(messageManager.getTpaInfoVersion(pluginVersion))
         player.sendMessage(messageManager.getTpaInfoPerformanceMode(detectedMode.name))
         player.sendMessage(messageManager.getTpaInfoAvailableRam(getAvailableMemoryMB().toString()))
         player.sendMessage(messageManager.getTpaInfoMaxRam(getMaxMemoryMB().toString()))

@@ -5,8 +5,12 @@ plugins {
     id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
+object VersionConfig {
+    const val PLUGIN_VERSION = "1.0.0"
+}
+
 group = "com.relaxlikes"
-version = "1.5.0"
+version = VersionConfig.PLUGIN_VERSION
 
 repositories {
     mavenCentral()

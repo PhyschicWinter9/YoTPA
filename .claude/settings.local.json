@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"https://raw.githubusercontent.com/PaperMC/Paper/dev%2F26.1/build.gradle.kts\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/PaperMC/Paper/refs/heads/dev%2F26.1/build.gradle.kts\")"
+    ]
+  }
+}

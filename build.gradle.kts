@@ -1,12 +1,16 @@
 plugins {
-    kotlin("jvm") version "2.1.20"
+    kotlin("jvm") version "2.3.0"
     id("com.gradleup.shadow") version "8.3.0"
     id("xyz.jpenilla.run-paper") version "2.3.1"
     id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
+object VersionConfig {
+    const val PLUGIN_VERSION = "1.5.0"
+}
+
 group = "com.relaxlikes"
-version = "1.4.0"
+version = VersionConfig.PLUGIN_VERSION
 
 repositories {
     mavenCentral()
@@ -44,7 +48,16 @@ tasks {
 
 val targetJavaVersion = 21
 kotlin {
-    jvmToolchain(targetJavaVersion)
+    jvmToolchain(25)
+    compilerOptions {
+        // Emit Java 21 bytecode so the plugin runs on both 1.21.x (Java 21) and 26.1.x (Java 25) servers
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+    }
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    // Keep Java compilation output at Java 21 for the same cross-version reason
+    options.release.set(targetJavaVersion)
 }
 
 tasks.build {

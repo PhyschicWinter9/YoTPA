@@ -2,7 +2,7 @@ name: Simple Build
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ 'dev/**' ]
   pull_request:
     branches: [ main, master ]
 
@@ -18,10 +18,14 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Build with Gradle (without wrapper)
-        uses: gradle/gradle-build-action@v3
-        with:
-          arguments: clean build shadowJar
+      - name: Build with Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run build
+        run: ./gradlew clean build
 
       - name: List all files in build directory
         run: find build -name "*.jar" -type f

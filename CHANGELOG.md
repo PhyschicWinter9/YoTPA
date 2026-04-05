@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-04-05
+
+### 🎉 Major Update - Multi-Version Support & JDK 25
+
+### Added
+
+#### Multi-Version Compatibility
+- **Minecraft 1.21.x – 26.1.x support** - Single JAR now runs on servers from 1.21 through Paper 26.1
+- **JDK 25 development toolchain** - Project upgraded to compile with JDK 25 while targeting Java 21 bytecode for backwards compatibility
+
+### Changed
+
+#### Build & Toolchain
+- **Kotlin upgraded to 2.3.0** - Required for proper JDK 25 toolchain support
+- **JVM toolchain set to JDK 25** - Development now uses JDK 25
+- **Bytecode target stays at Java 21** - Ensures the plugin runs on both 1.21.x (Java 21) and 26.1.x (Java 25) servers
+- **Explicit `options.release = 21`** - Java compilation also locked to Java 21 output
+
+### 📦 Technical Details
+
+#### API Compatibility
+- Minimum supported Minecraft: `1.21.x`
+- Maximum tested Minecraft: `26.1.x` (Paper alpha)
+- Java runtime requirement: 21+ (1.21.x servers) / 25+ (26.1.x servers)
+- Kotlin version: 2.3.0
+- JVM bytecode target: Java 21
+
+#### Build Configuration
+```kotlin
+kotlin {
+    jvmToolchain(25)
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_21)
+    }
+}
+```
+
+### 📝 Migration Guide
+
+#### From 1.4.0 to 1.5.0
+
+No breaking changes. Drop-in replacement for both 1.21.x and 26.1.x servers.
+
+1. Stop your server
+2. Replace `YoTPA-1.4.0.jar` with `YoTPA-1.5.0.jar`
+3. Start your server
+
+Your existing `config.yml` and `messages.yml` are fully preserved.
+
+### ⚠️ Breaking Changes
+
+**None.** Fully backward compatible with all existing configurations.
+
+---
+
 ## [1.4.0] - 2025-01-10
 
 ### 🎉 Major Release - Full Internationalization & Modern Paper API
@@ -233,6 +288,7 @@ None currently known. Please report any issues on [GitHub Issues](https://github
 
 | Version | Release Date | Major Features |
 |---------|--------------|----------------|
+| 1.5.0 | 2026-04-05 | Multi-Version Support (1.21.x–26.1.x), JDK 25 |
 | 1.4.0 | 2025-01-10 | Internationalization, Modern Paper API |
 | 1.3.0 | 2025-10-02 | Adaptive Performance, Auto-optimization |
 | 1.2.0 | 2025-05-12 | Timeout & Cooldown System |
@@ -243,7 +299,7 @@ None currently known. Please report any issues on [GitHub Issues](https://github
 
 ## Upgrade Guide
 
-### From Any Version to 1.4.0
+### From Any Version to 1.5.0
 
 1. Backup your `config.yml`
 2. Stop your server

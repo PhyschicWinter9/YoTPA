@@ -22,7 +22,7 @@ class YoTPA : JavaPlugin() {
 
     // Version
     companion object {
-        const val VERSION = "1.4.0"
+        const val VERSION = "1.5.0"
     }
 
     // Performance mode enum

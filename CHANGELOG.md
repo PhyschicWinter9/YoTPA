@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.1] - 2026-04-06
+
+### 🔧 Folia Support, Performance & Memory Leak Fixes
+
+### Added
+
+#### Folia Support
+- **Full Folia compatibility** — plugin now loads and runs correctly on Folia regionized servers
+- **`folia-supported: true`** added to `plugin.yml`
+- **Runtime Folia detection** via `RegionizedServer` class check — no config needed, auto-detected at startup
+- **Entity scheduler for countdowns** — `player.scheduler.runAtFixedRate()` used on Folia instead of `BukkitScheduler`
+- **`globalRegionScheduler`** used for maintenance tasks and expired-request dispatch on Folia
+- **`teleportAsync()`** used on Folia instead of synchronous `teleport()` (cross-region teleport requirement)
+- **`asyncScheduler.runNow()`** used for update checker HTTP request on Folia
+- **`player.scheduler.runDelayed()`** used for update join notification on Folia
+
+#### Memory & Lifecycle Fixes
+- **Destination offline detection** — if the destination player disconnects mid-countdown, the teleport is cancelled immediately and the teleporter is notified (previously held a strong `Player` reference for the full countdown duration)
+- **TPA request cleanup on disconnect** — both sent and received pending requests are removed when a player quits; previously they lingered in memory until the expiry timer fired
+- **bStats daily reset task now cancellable** — task handle stored and cancelled via `bStats.shutdown()` in `onDisable()`; previously the task could not be stopped on plugin reload or server shutdown
+
+#### Performance
+- **Cached `PerformanceSettings`** — settings computed once on enable/reload and stored as `@Volatile cachedSettings`; all hot paths (`processCountdown`, `cleanupCaches`, `getPlayerName`, `getMovementThreshold`) read from cache instead of allocating a new object each call
+- **Single batch countdown task on Paper** — replaces one scheduled task per teleporting player with a single repeating task that iterates all active countdowns; scheduler overhead is O(1) regardless of concurrent teleport count
+- **`teleportData` always populated** — previously only filled when `enableTeleportDataCache = true`; now always used as the source of truth for active teleports on both Paper and Folia
+- **`/tpainfo` active teleport count** — now reads from `teleportData.size` (accurate on both Paper and Folia) instead of `teleportTasks.size` which was always 0 on Paper
+
+#### Message System
+- **Bundled message defaults** — `messages.yml` from the JAR is loaded as defaults on every startup; keys missing from the server's file fall back to the bundled value automatically — no manual migration needed when new message keys are added
+- **`teleport.cancelled.destination-offline`** — new message shown when teleport is cancelled because the destination went offline
+
+### Fixed
+
+- Fixed `UnsupportedOperationException` from `CraftScheduler` on Folia (`bStatsTPA`, `UpdateChecker`, `startMaintenanceTasks`)
+- Fixed `UnsupportedOperationException: Must use teleportAsync` on Folia during teleport execution
+- Fixed `[YoTPA] Message not found for path: commands.tpainfo.server-type` warning (key removed)
+- Fixed stale player name cache entries not being cleaned when `enablePlayerCache = false`
+
+### Removed
+
+- **`commands.tpainfo.server-type`** message and its display in `/tpainfo` — redundant information
+
+### 📦 Technical Details
+
+#### Modified Files
+- `YoTPA.kt` — Folia scheduler, batch task, cached settings, offline destination detection, request cleanup on quit
+- `PlayerMoveListener.kt` — calls `cleanupPlayerOnQuit()` on disconnect
+- `bStatsTPA.kt` — task handle stored, `shutdown()` method added, class renamed to `BStatsTPA`
+- `UpdateChecker.kt` — async/entity scheduler used on Folia
+- `MessageManager.kt` — bundled defaults merged on load, destination-offline message added
+- `messages.yml` — `teleport.cancelled.destination-offline` added, `commands.tpainfo.server-type` removed
+- `plugin.yml` — `folia-supported: true` added
+
+### 📝 Migration Guide
+
+#### From 1.5.0 to 1.5.1
+
+No breaking changes. Drop-in replacement.
+
+1. Stop your server
+2. Replace `YoTPA-1.5.0.jar` with `YoTPA-1.5.1.jar`
+3. Start your server
+
+Your existing `config.yml` and `messages.yml` are fully preserved. Any new message keys are sourced automatically from the plugin defaults.
+
+### ⚠️ Breaking Changes
+
+**None.** Fully backward compatible with all existing configurations.
+
+---
+
 ## [1.5.0] - 2026-04-05
 
 ### 🎉 Major Update - Multi-Version Support, JDK 25 & Update Checker
@@ -305,6 +376,7 @@ None currently known. Please report any issues on [GitHub Issues](https://github
 
 | Version | Release Date | Major Features |
 |---------|--------------|----------------|
+| 1.5.1 | 2026-04-06 | Folia Support, Memory Leak Fixes, Performance |
 | 1.5.0 | 2026-04-05 | Multi-Version Support (1.21.x–26.1.x), JDK 25 |
 | 1.4.0 | 2025-01-10 | Internationalization, Modern Paper API |
 | 1.3.0 | 2025-10-02 | Adaptive Performance, Auto-optimization |
@@ -316,7 +388,7 @@ None currently known. Please report any issues on [GitHub Issues](https://github
 
 ## Upgrade Guide
 
-### From Any Version to 1.5.0
+### From Any Version to 1.5.1
 
 1. Backup your `config.yml`
 2. Stop your server

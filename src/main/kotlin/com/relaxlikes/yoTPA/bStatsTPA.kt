@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.collections.HashMap
 
 
-class bStatsTPA(private val plugin: YoTPA) {
+class BStatsTPA(private val plugin: YoTPA) {
 
     // Stored so it can be cancelled on plugin disable
     private var dailyResetTask: ScheduledTask? = null

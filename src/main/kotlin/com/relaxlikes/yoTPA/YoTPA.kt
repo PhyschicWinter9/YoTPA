@@ -81,7 +81,7 @@ class YoTPA : JavaPlugin() {
     // Executor service (nullable for ultra-light mode)
     private var executor: ScheduledExecutorService? = null
 
-    private lateinit var bStats: bStatsTPA
+    private lateinit var bStats: BStatsTPA
 
     // Message manager for customizable messages
     private lateinit var messageManager: MessageManager
@@ -149,7 +149,7 @@ class YoTPA : JavaPlugin() {
         messageManager.initialize()
 
         // Initialize bStats
-        bStats = bStatsTPA(this)
+        bStats = BStatsTPA(this)
         bStats.initialize()
 
         // Initialize update checker

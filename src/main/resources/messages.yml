@@ -96,7 +96,6 @@ commands:
     header: "<gold>═══ YoTPA System Info ═══</gold>"
     version: "<yellow>Version: <white>{version}</white></yellow>"
     performance-mode: "<yellow>Performance Mode: <white>{mode}</white></yellow>"
-    server-type: "<yellow>Server: <white>{type}</white></yellow>"
     available-ram: "<yellow>Available RAM: <white>{ram} MB</white></yellow>"
     max-ram: "<yellow>Max RAM: <white>{ram} MB</white></yellow>"
     optimization: "<yellow>Optimization: <white>{level}</white></yellow>"
@@ -120,6 +119,7 @@ teleport:
   # Cancellation messages
   cancelled:
     movement: "<red>Teleportation cancelled due to movement.</red>"
+    destination-offline: "<red>Teleportation cancelled — destination player went offline.</red>"
     general: "<red>Teleportation cancelled.</red>"
 
   # Request expiration

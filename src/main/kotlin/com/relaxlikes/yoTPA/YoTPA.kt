@@ -71,6 +71,13 @@ class YoTPA : JavaPlugin() {
     // Cached title components
     private val titleCache by lazy { CachedTitleComponents() }
 
+    // Cached performance settings — written only from main thread (onEnable/reload), read from any thread
+    @Volatile private var cachedSettings: PerformanceSettings? = null
+    private inline val settings: PerformanceSettings get() = cachedSettings ?: getPerformanceSettings()
+
+    // Single batch-countdown task ID for Paper mode (one task processes all active teleports)
+    private var paperBatchTaskId: Int = -1
+
     // Executor service (nullable for ultra-light mode)
     private var executor: ScheduledExecutorService? = null
 
@@ -127,8 +134,9 @@ class YoTPA : JavaPlugin() {
         saveDefaultConfig()
         loadConfig()
 
-        // Detect and apply performance mode
+        // Detect and apply performance mode, then cache settings once
         detectAndApplyPerformanceMode()
+        cachedSettings = getPerformanceSettings()
 
         // Initialize data structures with adaptive sizing
         initializeDataStructures()
@@ -156,6 +164,12 @@ class YoTPA : JavaPlugin() {
         // Start maintenance tasks
         startMaintenanceTasks()
 
+        // On Paper: one batch task drives ALL active countdowns (O(1) scheduler overhead)
+        // On Folia: per-entity tasks are used instead (scheduled in startTeleportCountdown)
+        if (!isFolia) {
+            startPaperBatchTask()
+        }
+
         // Log startup info
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
@@ -167,9 +181,11 @@ class YoTPA : JavaPlugin() {
     }
 
     override fun onDisable() {
-        // Cancel all active teleport tasks
-        teleportTasks.values.forEach { task ->
-            runCatching { task.cancel() }
+        // Cancel active teleport tasks
+        if (isFolia) {
+            teleportTasks.values.forEach { task -> runCatching { task.cancel() } }
+        } else if (paperBatchTaskId != -1) {
+            runCatching { Bukkit.getScheduler().cancelTask(paperBatchTaskId) }
         }
 
         // Shutdown executor service if exists
@@ -187,6 +203,9 @@ class YoTPA : JavaPlugin() {
                 Thread.currentThread().interrupt()
             }
         }
+
+        // Cancel bStats daily reset task
+        bStats.shutdown()
 
         // Clear all data
         clearAllData()
@@ -389,7 +408,7 @@ class YoTPA : JavaPlugin() {
         }
     }
 
-    fun getMovementThreshold(): Double = getPerformanceSettings().movementThreshold
+    fun getMovementThreshold(): Double = settings.movementThreshold
 
     override fun onCommand(sender: CommandSender, command: Command, label: String, args: Array<out String>): Boolean {
         if (sender !is Player) {
@@ -531,6 +550,7 @@ class YoTPA : JavaPlugin() {
 
             val oldMode = detectedMode
             detectAndApplyPerformanceMode()
+            cachedSettings = getPerformanceSettings()
 
             sendMessage(player, messageManager.getTpaReloadSuccess())
 
@@ -703,12 +723,11 @@ class YoTPA : JavaPlugin() {
         player.sendMessage(messageManager.getTpaInfoHeader())
         player.sendMessage(messageManager.getTpaInfoVersion(pluginVersion))
         player.sendMessage(messageManager.getTpaInfoPerformanceMode(detectedMode.name))
-        player.sendMessage(messageManager.getTpaInfoServerType(type = if (isFolia) "Folia" else "Paper/Spigot"))
         player.sendMessage(messageManager.getTpaInfoAvailableRam(getAvailableMemoryMB().toString()))
         player.sendMessage(messageManager.getTpaInfoMaxRam(getMaxMemoryMB().toString()))
         player.sendMessage(messageManager.getTpaInfoOptimization(getOptimizationLevel()))
         player.sendMessage(messageManager.getTpaInfoActiveRequests(tpaRequests.size.toString()))
-        player.sendMessage(messageManager.getTpaInfoActiveTeleports(teleportTasks.size.toString()))
+        player.sendMessage(messageManager.getTpaInfoActiveTeleports(teleportData.size.toString()))
     }
 
     fun startTeleportCountdown(teleporter: Player, destination: Player) {
@@ -718,7 +737,6 @@ class YoTPA : JavaPlugin() {
         val originalLocation = teleporter.location.clone()
         storeOriginalLocation(teleporter, originalLocation)
 
-        val settings = getPerformanceSettings()
         val data = TeleportData(
             destination = destination,
             startTime = System.currentTimeMillis(),
@@ -726,9 +744,8 @@ class YoTPA : JavaPlugin() {
             lastShownSecond = teleportDelay
         )
 
-        if (settings.enableTeleportDataCache) {
-            teleportData[teleporter.uniqueId] = data
-        }
+        // Always store in teleportData — it's the source of truth for both Paper and Folia
+        teleportData[teleporter.uniqueId] = data
 
         // Show title
         teleporter.showTitle(Title.title(
@@ -740,14 +757,26 @@ class YoTPA : JavaPlugin() {
         // Initial countdown message
         sendCountdownMessage(teleporter, teleportDelay)
 
-        // Run countdown task via entity scheduler (Folia-compatible; works on both Paper and Folia)
-        teleporter.scheduler.runAtFixedRate(this, { _ ->
-            processCountdown(teleporter, data)
-        }, null, settings.countdownInterval, settings.countdownInterval)
-            ?.let { teleportTasks[teleporter.uniqueId] = it }
+        // Folia: schedule a per-entity task (required for region threading)
+        // Paper: the single batch task (started in onEnable) drives all countdowns — no per-player task needed
+        if (isFolia) {
+            teleporter.scheduler.runAtFixedRate(this, { _ ->
+                processCountdown(teleporter, data)
+            }, null, settings.countdownInterval, settings.countdownInterval)
+                ?.let { teleportTasks[teleporter.uniqueId] = it }
+        }
     }
 
     private fun processCountdown(teleporter: Player, data: TeleportData) {
+        // Release the Player reference and abort if destination went offline — prevents holding
+        // a strong reference to an offline Player object for the rest of the countdown duration
+        if (!data.destination.isOnline) {
+            cancelTeleport(teleporter.uniqueId)
+            sendMessage(teleporter, messageManager.getTeleportCancelledDestinationOffline())
+            playSound(teleporter, cancelSoundKey)
+            return
+        }
+
         val elapsed = System.currentTimeMillis() - data.startTime
         val remaining = data.duration - elapsed
 
@@ -770,8 +799,9 @@ class YoTPA : JavaPlugin() {
     }
 
     fun cancelTeleport(uuid: UUID) {
-        teleportTasks.remove(uuid)?.let { task ->
-            runCatching { task.cancel() }
+        // Folia: cancel the per-entity scheduled task; Paper: batch task skips removed entries automatically
+        if (isFolia) {
+            teleportTasks.remove(uuid)?.let { task -> runCatching { task.cancel() } }
         }
         teleportData.remove(uuid)
 
@@ -779,6 +809,18 @@ class YoTPA : JavaPlugin() {
         Bukkit.getPlayer(uuid)?.let { player ->
             removeOriginalLocation(player)
         }
+    }
+
+    /**
+     * Called when a player disconnects. Cleans up any TPA requests they sent or received
+     * so stale Player references and map entries don't linger until the expiry timer fires.
+     */
+    fun cleanupPlayerOnQuit(player: Player) {
+        val uuid = player.uniqueId
+        // Remove request where this player is the target
+        tpaRequests.remove(uuid)
+        // Remove request where this player is the requester (requires a scan — bounded by online count)
+        tpaRequests.entries.removeIf { it.value.requesterUUID == uuid }
     }
 
     fun cancelTeleportDueToMovement(player: Player) {
@@ -807,8 +849,30 @@ class YoTPA : JavaPlugin() {
         }
     }
 
+    /**
+     * Paper-only: one repeating task processes ALL active teleport countdowns each tick.
+     * Replaces N per-player scheduled tasks with a single O(active-teleports) loop,
+     * keeping scheduler overhead at O(1) regardless of concurrent player count.
+     */
+    private fun startPaperBatchTask() {
+        paperBatchTaskId = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
+            if (teleportData.isEmpty()) return@scheduleSyncRepeatingTask
+            // Snapshot keys first to avoid ConcurrentModificationException while cancelTeleport mutates the map
+            val uuids = ArrayList(teleportData.keys)
+            for (uuid in uuids) {
+                val data = teleportData[uuid] ?: continue
+                val teleporter = Bukkit.getPlayer(uuid)
+                if (teleporter == null || !teleporter.isOnline) {
+                    cancelTeleport(uuid)
+                    continue
+                }
+                processCountdown(teleporter, data)
+            }
+        }, 1L, 1L)
+    }
+
     private fun startMaintenanceTasks() {
-        val settings = getPerformanceSettings()
+        val settings = this.settings
 
         if (executor != null) {
             // Use executor for async tasks
@@ -886,8 +950,6 @@ class YoTPA : JavaPlugin() {
     }
 
     private fun cleanupCaches() {
-        val settings = getPerformanceSettings()
-
         if (settings.enablePlayerCache) {
             val iterator = playerNameCache.entries.iterator()
             while (iterator.hasNext()) {
@@ -941,7 +1003,6 @@ class YoTPA : JavaPlugin() {
     }
 
     private fun getPlayerName(uuid: UUID): String {
-        val settings = getPerformanceSettings()
         return if (settings.enablePlayerCache) {
             playerNameCache.getOrPut(uuid) {
                 Bukkit.getPlayer(uuid)?.name ?: "Unknown"

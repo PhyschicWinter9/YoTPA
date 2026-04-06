@@ -35,10 +35,18 @@ class MessageManager(private val plugin: JavaPlugin) {
     }
 
     /**
-     * Load or reload messages from the configuration file
+     * Load or reload messages from the configuration file.
+     * Any key missing from the server's messages.yml falls back to the bundled default,
+     * so new keys added in plugin updates are always available without manual migration.
      */
     fun loadMessages() {
         messagesConfig = YamlConfiguration.loadConfiguration(messagesFile)
+
+        // Merge bundled defaults — keys absent in the server file fall through to the JAR resource
+        plugin.getResource("messages.yml")?.bufferedReader()?.use { reader ->
+            val defaults = YamlConfiguration.loadConfiguration(reader)
+            messagesConfig.setDefaults(defaults)
+        }
 
         // Parse and cache the prefix
         val prefixString = messagesConfig.getString("prefix") ?: "<green><bold>[<aqua>YoTPA</aqua>]</bold></green> "
@@ -176,7 +184,6 @@ class MessageManager(private val plugin: JavaPlugin) {
     fun getTpaInfoHeader() = getMessage("commands.tpainfo.header")
     fun getTpaInfoVersion(version: String) = getMessage("commands.tpainfo.version", mapOf("version" to version))
     fun getTpaInfoPerformanceMode(mode: String) = getMessage("commands.tpainfo.performance-mode", mapOf("mode" to mode))
-    fun getTpaInfoServerType(type: String) = getMessage("commands.tpainfo.server-type", mapOf("type" to type))
     fun getTpaInfoAvailableRam(ram: String) = getMessage("commands.tpainfo.available-ram", mapOf("ram" to ram))
     fun getTpaInfoMaxRam(ram: String) = getMessage("commands.tpainfo.max-ram", mapOf("ram" to ram))
     fun getTpaInfoOptimization(level: String) = getMessage("commands.tpainfo.optimization", mapOf("level" to level))
@@ -192,6 +199,7 @@ class MessageManager(private val plugin: JavaPlugin) {
     }
     fun getTeleportSuccess(target: String) = getMessageWithPrefix("teleport.success", mapOf("target" to target))
     fun getTeleportCancelledMovement() = getMessageWithPrefix("teleport.cancelled.movement")
+    fun getTeleportCancelledDestinationOffline() = getMessageWithPrefix("teleport.cancelled.destination-offline")
     fun getTeleportCancelledGeneral() = getMessageWithPrefix("teleport.cancelled.general")
     fun getTeleportExpiredSender(target: String) = getMessageWithPrefix("teleport.expired.sender", mapOf("target" to target))
     fun getTeleportExpiredReceiver(requester: String) = getMessageWithPrefix("teleport.expired.receiver", mapOf("requester" to requester))

@@ -49,9 +49,9 @@ class PlayerMoveListener(
 
     @EventHandler(priority = EventPriority.MONITOR)
     fun onPlayerQuit(event: PlayerQuitEvent) {
-        // Cancel any ongoing teleport when player disconnects
-        // PersistentDataContainer automatically cleans up, but we still need to cancel the task
-        plugin.cancelTeleport(event.player.uniqueId)
+        val player = event.player
+        plugin.cancelTeleport(player.uniqueId)
+        plugin.cleanupPlayerOnQuit(player)
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

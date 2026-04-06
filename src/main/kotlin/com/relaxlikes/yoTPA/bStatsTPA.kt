@@ -1,5 +1,6 @@
 package com.relaxlikes.yoTPA
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import org.bstats.bukkit.Metrics
 import org.bstats.charts.MultiLineChart
 import org.bstats.charts.SimplePie
@@ -9,6 +10,10 @@ import kotlin.collections.HashMap
 
 
 class bStatsTPA(private val plugin: YoTPA) {
+
+    // Stored so it can be cancelled on plugin disable
+    private var dailyResetTask: ScheduledTask? = null
+    private var dailyResetTaskId: Int = -1
 
     // Counters for all-time statistics
     private val requestsSent = AtomicInteger(0)
@@ -155,13 +160,13 @@ class bStatsTPA(private val plugin: YoTPA) {
             plugin.logger.info("Daily teleport statistics have been reset")
         }
 
-        // Schedule the reset task (Folia-compatible)
+        // Schedule the reset task and store the handle for cancellation on disable
         if (YoTPA.isFolia) {
-            plugin.server.globalRegionScheduler.runAtFixedRate(plugin, { _ ->
+            dailyResetTask = plugin.server.globalRegionScheduler.runAtFixedRate(plugin, { _ ->
                 resetTask.run()
-            }, delayTicks, 1728000) // 24 hours in ticks
+            }, delayTicks, 1728000)
         } else {
-            plugin.server.scheduler.scheduleSyncRepeatingTask(plugin, resetTask, delayTicks, 1728000)
+            dailyResetTaskId = plugin.server.scheduler.scheduleSyncRepeatingTask(plugin, resetTask, delayTicks, 1728000)
         }
     }
 
@@ -231,6 +236,13 @@ class bStatsTPA(private val plugin: YoTPA) {
             (requestsAccepted.get().toDouble() / sent * 100).toInt()
         } else {
             0
+        }
+    }
+
+    fun shutdown() {
+        dailyResetTask?.cancel()
+        if (dailyResetTaskId != -1) {
+            runCatching { plugin.server.scheduler.cancelTask(dailyResetTaskId) }
         }
     }
 }

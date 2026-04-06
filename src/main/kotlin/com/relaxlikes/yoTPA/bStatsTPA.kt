@@ -147,16 +147,22 @@ class bStatsTPA(private val plugin: YoTPA) {
         val midnightMillis = calendar.timeInMillis
         val delayTicks = (midnightMillis - currentTimeMillis) / 50
 
-        // Schedule the reset task
-        plugin.server.scheduler.scheduleSyncRepeatingTask(plugin, {
-            // Reset all daily counters
+        val resetTask = Runnable {
             dailyRequestsSent.set(0)
             dailyRequestsAccepted.set(0)
             dailyRequestsDenied.set(0)
             dailyRequestsExpired.set(0)
-
             plugin.logger.info("Daily teleport statistics have been reset")
-        }, delayTicks, 1728000) // 24 hours in ticks (20tps * 60s * 60m * 24h)
+        }
+
+        // Schedule the reset task (Folia-compatible)
+        if (YoTPA.isFolia) {
+            plugin.server.globalRegionScheduler.runAtFixedRate(plugin, { _ ->
+                resetTask.run()
+            }, delayTicks, 1728000) // 24 hours in ticks
+        } else {
+            plugin.server.scheduler.scheduleSyncRepeatingTask(plugin, resetTask, delayTicks, 1728000)
+        }
     }
 
     /**

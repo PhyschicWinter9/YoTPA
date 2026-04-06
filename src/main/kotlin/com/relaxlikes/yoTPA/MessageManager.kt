@@ -176,6 +176,7 @@ class MessageManager(private val plugin: JavaPlugin) {
     fun getTpaInfoHeader() = getMessage("commands.tpainfo.header")
     fun getTpaInfoVersion(version: String) = getMessage("commands.tpainfo.version", mapOf("version" to version))
     fun getTpaInfoPerformanceMode(mode: String) = getMessage("commands.tpainfo.performance-mode", mapOf("mode" to mode))
+    fun getTpaInfoServerType(type: String) = getMessage("commands.tpainfo.server-type", mapOf("type" to type))
     fun getTpaInfoAvailableRam(ram: String) = getMessage("commands.tpainfo.available-ram", mapOf("ram" to ram))
     fun getTpaInfoMaxRam(ram: String) = getMessage("commands.tpainfo.max-ram", mapOf("ram" to ram))
     fun getTpaInfoOptimization(level: String) = getMessage("commands.tpainfo.optimization", mapOf("level" to level))

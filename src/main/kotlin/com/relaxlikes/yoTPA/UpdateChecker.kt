@@ -31,7 +31,7 @@ class UpdateChecker(
     private val apiUrl = "https://api.github.com/repos/$githubRepo/releases/latest"
 
     fun check() {
-        plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable {
+        val task = Runnable {
             try {
                 val url = URI(apiUrl).toURL()
                 val connection = url.openConnection() as HttpURLConnection
@@ -70,7 +70,12 @@ class UpdateChecker(
             } catch (e: IOException) {
                 plugin.logger.log(Level.WARNING, "Could not check for updates: ${e.message}")
             }
-        })
+        }
+        if (YoTPA.isFolia) {
+            plugin.server.asyncScheduler.runNow(plugin) { task.run() }
+        } else {
+            plugin.server.scheduler.runTaskAsynchronously(plugin, task)
+        }
     }
 
     @EventHandler
@@ -80,9 +85,13 @@ class UpdateChecker(
         if (!updateAvailable) return
 
         val latest = latestVersion ?: return
-        plugin.server.scheduler.runTaskLater(plugin, Runnable {
-            notifyPlayer(player, latest)
-        }, 40L) // 2-second delay so the player fully loads in
+        if (YoTPA.isFolia) {
+            player.scheduler.runDelayed(plugin, { _ -> notifyPlayer(player, latest) }, null, 40L)
+        } else {
+            plugin.server.scheduler.runTaskLater(plugin, Runnable {
+                notifyPlayer(player, latest)
+            }, 40L)
+        }
     }
 
     private fun notifyPlayer(player: Player, latest: String) {

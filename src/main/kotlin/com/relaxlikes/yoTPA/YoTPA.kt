@@ -1,5 +1,6 @@
 package com.relaxlikes.yoTPA
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.title.Title
 import org.bukkit.Bukkit
@@ -20,6 +21,16 @@ import java.util.logging.Level
 
 class YoTPA : JavaPlugin() {
 
+    companion object {
+        /** True when running on Folia (regionized multithreading server). */
+        val isFolia: Boolean = try {
+            Class.forName("io.papermc.paper.threadedregions.RegionizedServer")
+            true
+        } catch (_: ClassNotFoundException) {
+            false
+        }
+    }
+
     // Version is read from plugin.yml at runtime (injected by processResources from VersionConfig.PLUGIN_pluginVersion)
     val pluginVersion: String get() = pluginMeta.version
 
@@ -39,7 +50,7 @@ class YoTPA : JavaPlugin() {
     // Thread-safe data structures with adaptive sizing
     private lateinit var tpaRequests: ConcurrentHashMap<UUID, TpaRequest>
     private lateinit var cooldowns: ConcurrentHashMap<UUID, Long>
-    private lateinit var teleportTasks: ConcurrentHashMap<UUID, Int>
+    private lateinit var teleportTasks: ConcurrentHashMap<UUID, ScheduledTask>
     private lateinit var teleportData: ConcurrentHashMap<UUID, TeleportData>
     private lateinit var playerNameCache: ConcurrentHashMap<UUID, String>
 
@@ -149,6 +160,7 @@ class YoTPA : JavaPlugin() {
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
         logger.info("YoTPA Version: $pluginVersion")
+        logger.info("Server: ${if (isFolia) "Folia" else "Paper/Spigot"}")
         logger.info("Performance Mode: ${detectedMode.name}")
         logger.info("Optimization Level: ${getOptimizationLevel()}")
         logger.info("═══════════════════════════════════════")
@@ -156,8 +168,8 @@ class YoTPA : JavaPlugin() {
 
     override fun onDisable() {
         // Cancel all active teleport tasks
-        teleportTasks.values.forEach { taskId ->
-            runCatching { Bukkit.getScheduler().cancelTask(taskId) }
+        teleportTasks.values.forEach { task ->
+            runCatching { task.cancel() }
         }
 
         // Shutdown executor service if exists
@@ -691,6 +703,7 @@ class YoTPA : JavaPlugin() {
         player.sendMessage(messageManager.getTpaInfoHeader())
         player.sendMessage(messageManager.getTpaInfoVersion(pluginVersion))
         player.sendMessage(messageManager.getTpaInfoPerformanceMode(detectedMode.name))
+        player.sendMessage(messageManager.getTpaInfoServerType(type = if (isFolia) "Folia" else "Paper/Spigot"))
         player.sendMessage(messageManager.getTpaInfoAvailableRam(getAvailableMemoryMB().toString()))
         player.sendMessage(messageManager.getTpaInfoMaxRam(getMaxMemoryMB().toString()))
         player.sendMessage(messageManager.getTpaInfoOptimization(getOptimizationLevel()))
@@ -727,12 +740,11 @@ class YoTPA : JavaPlugin() {
         // Initial countdown message
         sendCountdownMessage(teleporter, teleportDelay)
 
-        // Run countdown task
-        val taskId = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
+        // Run countdown task via entity scheduler (Folia-compatible; works on both Paper and Folia)
+        teleporter.scheduler.runAtFixedRate(this, { _ ->
             processCountdown(teleporter, data)
-        }, settings.countdownInterval, settings.countdownInterval)
-
-        teleportTasks[teleporter.uniqueId] = taskId
+        }, null, settings.countdownInterval, settings.countdownInterval)
+            ?.let { teleportTasks[teleporter.uniqueId] = it }
     }
 
     private fun processCountdown(teleporter: Player, data: TeleportData) {
@@ -758,8 +770,8 @@ class YoTPA : JavaPlugin() {
     }
 
     fun cancelTeleport(uuid: UUID) {
-        teleportTasks.remove(uuid)?.let { taskId ->
-            runCatching { Bukkit.getScheduler().cancelTask(taskId) }
+        teleportTasks.remove(uuid)?.let { task ->
+            runCatching { task.cancel() }
         }
         teleportData.remove(uuid)
 
@@ -776,11 +788,23 @@ class YoTPA : JavaPlugin() {
     }
 
     private fun performTeleport(teleporter: Player, destination: Player) {
-        teleporter.teleport(destination)
-        sendMessage(teleporter, messageManager.getTeleportSuccess(destination.name))
-
-        playSound(teleporter, successSoundKey)
-        playSound(destination, successSoundKey)
+        if (isFolia) {
+            // Capture destination location and name on the current thread before going async
+            val destLocation = destination.location
+            val destName = destination.name
+            teleporter.teleportAsync(destLocation).thenAccept { success ->
+                if (success) {
+                    sendMessage(teleporter, messageManager.getTeleportSuccess(destName))
+                    teleporter.scheduler.run(this, { _ -> playSound(teleporter, successSoundKey) }, null)
+                    destination.scheduler.run(this, { _ -> playSound(destination, successSoundKey) }, null)
+                }
+            }
+        } else {
+            teleporter.teleport(destination)
+            sendMessage(teleporter, messageManager.getTeleportSuccess(destination.name))
+            playSound(teleporter, successSoundKey)
+            playSound(destination, successSoundKey)
+        }
     }
 
     private fun startMaintenanceTasks() {
@@ -798,14 +822,24 @@ class YoTPA : JavaPlugin() {
                     .onFailure { e -> logger.log(Level.WARNING, "Error during cache cleanup", e) }
             }, settings.cleanupInterval, settings.cleanupInterval, TimeUnit.MILLISECONDS)
         } else {
-            // Use Bukkit scheduler for sync tasks (ultra-light mode)
-            Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
-                checkExpiredRequests()
-            }, settings.expirationInterval / 50, settings.expirationInterval / 50) // Convert ms to ticks
-
-            Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
-                cleanupCaches()
-            }, settings.cleanupInterval / 50, settings.cleanupInterval / 50)
+            // Use scheduler for sync tasks (ultra-light mode)
+            val expirationTicks = settings.expirationInterval / 50
+            val cleanupTicks = settings.cleanupInterval / 50
+            if (isFolia) {
+                server.globalRegionScheduler.runAtFixedRate(this, { _ ->
+                    checkExpiredRequests()
+                }, expirationTicks, expirationTicks)
+                server.globalRegionScheduler.runAtFixedRate(this, { _ ->
+                    cleanupCaches()
+                }, cleanupTicks, cleanupTicks)
+            } else {
+                Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
+                    checkExpiredRequests()
+                }, expirationTicks, expirationTicks)
+                Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
+                    cleanupCaches()
+                }, cleanupTicks, cleanupTicks)
+            }
         }
     }
 
@@ -823,9 +857,15 @@ class YoTPA : JavaPlugin() {
         }
 
         if (expiredRequests.isNotEmpty()) {
-            Bukkit.getScheduler().runTask(this, Runnable {
-                processExpiredRequests(expiredRequests)
-            })
+            if (isFolia) {
+                server.globalRegionScheduler.run(this) { _ ->
+                    processExpiredRequests(expiredRequests)
+                }
+            } else {
+                Bukkit.getScheduler().runTask(this, Runnable {
+                    processExpiredRequests(expiredRequests)
+                })
+            }
         }
     }
 

@@ -174,7 +174,6 @@ class YoTPA : JavaPlugin() {
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
         logger.info("YoTPA Version: $pluginVersion")
-        logger.info("Server: ${if (isFolia) "Folia" else "Paper/Spigot"}")
         logger.info("Performance Mode: ${detectedMode.name}")
         logger.info("Optimization Level: ${getOptimizationLevel()}")
         logger.info("═══════════════════════════════════════")

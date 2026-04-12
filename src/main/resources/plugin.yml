@@ -1,7 +1,8 @@
 name: YoTPA
-version: 1.5.0
+version: 1.6.0
 main: com.relaxlikes.yoTPA.YoTPA
 api-version: 1.21
+folia-supported: true
 author: PhyschicWinter9 & VIBEs Coding XD
 description: Smart adaptive teleport plugin that automatically optimizes for any server size
 website: https://github.com/relaxlikes/yoTPA
@@ -47,6 +48,11 @@ commands:
     usage: /tpainfo
     permission: yotpa.info
 
+  back:
+    description: Teleport back to your previous location
+    usage: /back
+    permission: yotpa.back
+
 permissions:
   yotpa.use:
     description: Allow using basic TPA commands
@@ -64,8 +70,16 @@ permissions:
     description: Allow viewing system information
     default: op
 
+  yotpa.back:
+    description: Allow using /back to return to previous location
+    default: true
+
   yotpa.bypass.cooldown:
     description: Bypass teleport request cooldown
+    default: op
+
+  yotpa.bypass.back-cooldown:
+    description: Bypass /back cooldown
     default: op
 
   yotpa.bypass.timeout:
@@ -77,8 +91,10 @@ permissions:
     default: op
     children:
       yotpa.use: true
+      yotpa.back: true
       yotpa.reload: true
       yotpa.stats: true
       yotpa.info: true
       yotpa.bypass.cooldown: true
+      yotpa.bypass.back-cooldown: true
       yotpa.bypass.timeout: true

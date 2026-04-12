@@ -6,7 +6,7 @@ plugins {
 }
 
 object VersionConfig {
-    const val PLUGIN_VERSION = "1.5.0"
+    const val PLUGIN_VERSION = "1.6.0"
 }
 
 group = "com.relaxlikes"

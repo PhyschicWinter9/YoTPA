@@ -15,6 +15,10 @@ request-cooldown: 30
 # Recommended: 3-10 seconds
 teleport-delay: 5
 
+# /back cooldown in seconds (0 to disable)
+# Recommended: 15-60 seconds
+back-cooldown: 30
+
 # ═══════════════════════════════════════════════════════════════
 #                    PERFORMANCE SETTINGS
 # ═══════════════════════════════════════════════════════════════

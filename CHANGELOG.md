@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.0] - 2026-04-12
+
+### 🎉 /back Command, Full Folia Support, Performance & Thread-Safety
+
+### Added
+
+#### /back Command
+- **`/back` command** — teleports the player to their previous location after a completed TPA or death
+- **Single-use** — the saved location is consumed on use; a second `/back` reports "no previous location" until a new one is set by the next TPA or death
+- **Death location tracking** — `PlayerDeathEvent` automatically saves the death spot; `/back` returns players to where they died to collect items
+- **Post-respawn notification** — a chat message reminds the player they can use `/back` after respawning (20-tick delay, Folia-aware scheduling)
+- **Configurable cooldown** — `back-cooldown` in `config.yml` (default: 30s, set 0 to disable); prevents rapid cycling on death-heavy servers (OPs bypass via `yotpa.bypass.back-cooldown`)
+- **Folia-compatible** — uses `teleportAsync()` with all post-teleport side effects dispatched via `player.scheduler.run()`
+- **`yotpa.back`** permission (default: `true`)
+- **`yotpa.bypass.back-cooldown`** permission (default: `op`)
+- **New config key**: `back-cooldown: 30`
+- **New messages**: `commands.back.no-location`, `commands.back.teleporting`, `commands.back.death-saved`, `commands.back.cooldown`
+
+#### Update Notifications
+- **Daily update check** — re-checks GitHub Releases every 24 hours while the server is running
+- **Mid-session alerts** — if a new version is released while the server is up, all online OPs/admins are notified immediately (once per release, not once per check)
+- **Silent when up to date** — daily check produces no output if nothing changed
+- **Startup behaviour unchanged** — console banner + on-join OP notification still work as before
+- **Task properly cancelled** — daily check task is cancelled in `onDisable()` via `updateChecker.shutdown()`
+
+#### Folia Support
+- **Full Folia compatibility** — plugin loads and runs correctly on Folia regionized servers
+- **`folia-supported: true`** in `plugin.yml`
+- **Runtime Folia detection** via `RegionizedServer` class check — auto-detected at startup, no config needed
+- **Entity scheduler for countdowns** — `player.scheduler.runAtFixedRate()` on Folia instead of `BukkitScheduler`
+- **`globalRegionScheduler`** for maintenance tasks and expired-request dispatch on Folia
+- **`teleportAsync()`** on Folia to satisfy cross-region teleport requirements
+- **`asyncScheduler.runAtFixedRate()`** for daily update check on Folia
+- **`player.scheduler.runDelayed()`** for update join notification on Folia
+
+#### Message System
+- **Bundled message defaults** — `messages.yml` from the JAR is merged as defaults on every load; keys missing from the server file fall back automatically — no manual migration needed when new keys are added in future updates
+- **`teleport.cancelled.destination-offline`** — new message when teleport is cancelled because the destination went offline
+
+### Fixed
+
+#### Thread-Safety (Folia)
+- **`sendMessage()` from `thenAccept` callback** — previously called on an arbitrary async completion thread after `teleportAsync()`, violating Folia's thread-ownership model; now dispatched via `player.scheduler.run()` in both `performTeleport` and `handleBackCommand`
+
+#### Memory Leaks
+- **`TeleportData` held a live `Player` reference** — replaced `destination: Player` with `destinationUUID: UUID`; destination player is resolved fresh each tick via `Bukkit.getPlayer(UUID)`, eliminating zombie references and cross-region Player access on Folia
+- **Destination offline mid-countdown** — teleport is now cancelled immediately and the teleporter notified if the destination disconnects during the countdown
+- **TPA requests lingered after disconnect** — both sent and received pending requests are now removed immediately when a player quits, instead of waiting for the expiry timer
+- **bStats daily reset task not cancellable** — task handle is now stored and cancelled in `onDisable()`
+- **`cooldowns` and `playerNameCache` not cleaned on quit** — both maps now cleared immediately on `PlayerQuitEvent`
+
+#### Bug Fixes
+- **`performTeleport` Paper path ignored `teleport()` return value** — if another plugin cancelled the event, a false success message and sound played; now only fires when `teleport()` returns `true`
+- **`bStatsTPA` wrong config key** — `titles_enabled` chart read `"titles.enabled"` (non-existent) instead of `"features.titles"`; chart now reports the correct value
+- **Dead `if (isFolia)` branch in `startPaperBatchTask()`** — always `false` since the batch task is Paper-only; removed
+- Fixed `UnsupportedOperationException` from `CraftScheduler` on Folia (`bStatsTPA`, `UpdateChecker`, `startMaintenanceTasks`)
+- Fixed `UnsupportedOperationException: Must use teleportAsync` on Folia during teleport execution
+- Fixed `[YoTPA] Message not found for path: commands.tpainfo.server-type` console warning
+
+#### Performance
+- **Cached `PerformanceSettings`** — computed once on enable/reload (`@Volatile cachedSettings`); hot paths no longer allocate a new settings object each call
+- **Single batch countdown task on Paper** — one repeating task processes all active countdowns; scheduler overhead is O(1) at any player count
+- **ConcurrentHashMap direct iterator in batch task** — eliminates per-tick `ArrayList` snapshot allocation
+- **Sound objects cached at config load** — `Registry.SOUNDS.get()` called once per sound at load time; zero registry lookups at runtime per sound play
+- **`AtomicInteger` worker thread counter** — replaces racy `Thread.activeCount()` for thread naming
+- **`/tpainfo` active teleport count** — now reads from `teleportData.size` (accurate on both Paper and Folia)
+
+### Removed
+
+- **`commands.tpainfo.server-type`** message and display — redundant information
+
+### 📦 Technical Details
+
+#### Modified Files
+- `YoTPA.kt` — `/back` command, UUID refactor in `TeleportData`, Folia scheduler, batch task, cached settings, thread-safety fixes, memory leak fixes, `updateChecker.shutdown()` in `onDisable()`
+- `PlayerMoveListener.kt` — `onPlayerDeath` saves location, `onPlayerRespawn` sends delayed notification, `onPlayerQuit` cleanup
+- `bStatsTPA.kt` — task handle stored, `shutdown()` added, `features.titles` config key fix, class renamed to `BStatsTPA`
+- `UpdateChecker.kt` — daily 24-hour re-check, mid-session OP notification, Folia scheduler support, `shutdown()` added
+- `MessageManager.kt` — bundled defaults merged on load, destination-offline message added
+- `config.yml` — `back-cooldown: 30` added
+- `messages.yml` — `commands.back.*` added, `teleport.cancelled.destination-offline` added, `commands.tpainfo.server-type` removed
+- `plugin.yml` — `back` command, `yotpa.back`, `yotpa.bypass.back-cooldown` permissions, `folia-supported: true`
+
+### 📝 Migration Guide
+
+#### From 1.5.0 to 1.6.0
+
+No breaking changes. Drop-in replacement.
+
+1. Stop your server
+2. Replace `YoTPA-1.5.0.jar` with `YoTPA-1.6.0.jar`
+3. Start your server
+
+Your existing `config.yml` and `messages.yml` are fully preserved. A `back-cooldown: 30` key will be added to `config.yml` automatically.
+
+### ⚠️ Breaking Changes
+
+**None.** Fully backward compatible with all existing configurations.
+
+---
+
 ## [1.5.0] - 2026-04-05
 
 ### 🎉 Major Update - Multi-Version Support, JDK 25 & Update Checker
@@ -305,6 +406,7 @@ None currently known. Please report any issues on [GitHub Issues](https://github
 
 | Version | Release Date | Major Features |
 |---------|--------------|----------------|
+| 1.6.0 | 2026-04-12 | /back Command, Full Folia Support, Thread-Safety & Memory Leak Fixes |
 | 1.5.0 | 2026-04-05 | Multi-Version Support (1.21.x–26.1.x), JDK 25 |
 | 1.4.0 | 2025-01-10 | Internationalization, Modern Paper API |
 | 1.3.0 | 2025-10-02 | Adaptive Performance, Auto-optimization |
@@ -316,22 +418,22 @@ None currently known. Please report any issues on [GitHub Issues](https://github
 
 ## Upgrade Guide
 
-### From Any Version to 1.5.0
+### From Any Version to 1.6.0
 
 1. Backup your `config.yml`
 2. Stop your server
 3. Replace the JAR file
 4. Start your server
-5. New `messages.yml` will be created automatically
+5. New `messages.yml` will be created automatically if missing
 6. Customize `messages.yml` if desired
 7. Use `/tpareload` to apply changes
 
 ---
 
-## Support
+## Support & Feedback
 
 - **Bug Reports:** [GitHub Issues](https://github.com/PhyschicWinter9/YoTPA/issues)
-- **Feature Requests:** [GitHub Discussions](https://github.com/PhyschicWinter9/YoTPA/discussions)
+- **Feature Requests & Ideas:** [GitHub Issues](https://github.com/PhyschicWinter9/YoTPA/issues)
 - **Documentation:** [README.md](README.md)
 
 ---

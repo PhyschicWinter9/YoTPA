@@ -3,11 +3,6 @@ import { SERVER } from "./config.js";
 
 /**
  * Creates a single offline (cracked) bot and waits until it spawns.
- * @param {string} username
- * @returns {Promise<import("mineflayer").Bot>}
- */
-/**
- * Creates a single offline (cracked) bot and waits until it spawns.
  * Retries automatically when kicked for connection throttle.
  * @param {string} username
  * @param {number} maxRetries
@@ -33,6 +28,13 @@ export function createBot(username, maxRetries = 5) {
       });
 
       bot.on("error", (err) => {
+        // "Unknown dimension" fires when a bot is cross-world teleported and
+        // mineflayer doesn't have that dimension in its registry. Safe to ignore —
+        // the bot will respawn in the new world on its own.
+        if (err.message?.toLowerCase().includes("unknown dimension")) {
+          console.warn(`[~] ${username} unknown dimension (cross-world tp) — ignoring`);
+          return;
+        }
         // Ignore ECONNRESET on throttle retries — the kick handler covers it
         if (attempt >= maxRetries) {
           console.error(`[!] ${username} error: ${err.message}`);

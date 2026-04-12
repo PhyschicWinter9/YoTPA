@@ -1,5 +1,6 @@
 package com.relaxlikes.yoTPA
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import net.kyori.adventure.text.minimessage.MiniMessage
 import org.bukkit.entity.Player
 import org.bukkit.event.EventHandler
@@ -9,16 +10,21 @@ import org.bukkit.plugin.java.JavaPlugin
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
+import java.util.concurrent.TimeUnit
 import java.util.logging.Level
 
 /**
  * Checks for plugin updates by querying the GitHub Releases API.
- * Runs asynchronously on startup and notifies OPs on join.
+ *
+ * Behaviour:
+ * - Startup: checks immediately, logs result to console, notifies OPs on join
+ * - Daily: re-checks every 24 hours; notifies online OPs only when a new version
+ *   is discovered — completely silent if nothing changed
  */
 class UpdateChecker(
     private val plugin: JavaPlugin,
     private val currentVersion: String,
-    private val githubRepo: String  // e.g. "PhyschicWinter9/YoTPA"
+    private val githubRepo: String
 ) : Listener {
 
     @Volatile var latestVersion: String? = null
@@ -27,25 +33,69 @@ class UpdateChecker(
     @Volatile var updateAvailable: Boolean = false
         private set
 
+    // Version we last alerted about — prevents re-notifying for the same release
+    @Volatile private var notifiedVersion: String? = null
+
     private val miniMessage = MiniMessage.miniMessage()
     private val apiUrl = "https://api.github.com/repos/$githubRepo/releases/latest"
 
-    fun check() {
-        plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable {
-            try {
-                val url = URI(apiUrl).toURL()
-                val connection = url.openConnection() as HttpURLConnection
-                connection.apply {
-                    requestMethod = "GET"
-                    setRequestProperty("Accept", "application/vnd.github+json")
-                    setRequestProperty("User-Agent", "YoTPA-UpdateChecker")
-                    connectTimeout = 5000
-                    readTimeout = 5000
-                }
+    private var periodicFoliaTask: ScheduledTask? = null
+    private var periodicTaskId: Int = -1
 
+    companion object {
+        private const val CHECK_INTERVAL_HOURS = 24L
+        private val CHECK_INTERVAL_TICKS = CHECK_INTERVAL_HOURS * 60 * 60 * 20
+    }
+
+    /** Run the startup check and schedule the daily re-check. */
+    fun check() {
+        runCheck(isStartup = true)
+        scheduleDailyCheck()
+    }
+
+    /** Cancel the daily task — call from onDisable(). */
+    fun shutdown() {
+        periodicFoliaTask?.cancel()
+        if (periodicTaskId != -1) {
+            runCatching { plugin.server.scheduler.cancelTask(periodicTaskId) }
+        }
+    }
+
+    // ─── Scheduling ───────────────────────────────────────────────────────────
+
+    private fun scheduleDailyCheck() {
+        if (YoTPA.isFolia) {
+            periodicFoliaTask = plugin.server.asyncScheduler.runAtFixedRate(
+                plugin,
+                { _ -> runCheck(isStartup = false) },
+                CHECK_INTERVAL_HOURS, CHECK_INTERVAL_HOURS, TimeUnit.HOURS
+            )
+        } else {
+            periodicTaskId = plugin.server.scheduler.runTaskTimerAsynchronously(
+                plugin,
+                Runnable { runCheck(isStartup = false) },
+                CHECK_INTERVAL_TICKS, CHECK_INTERVAL_TICKS
+            ).taskId
+        }
+    }
+
+    // ─── HTTP check ───────────────────────────────────────────────────────────
+
+    private fun runCheck(isStartup: Boolean) {
+        try {
+            val url = URI(apiUrl).toURL()
+            val connection = url.openConnection() as HttpURLConnection
+            connection.apply {
+                requestMethod = "GET"
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("User-Agent", "YoTPA-UpdateChecker")
+                connectTimeout = 5000
+                readTimeout = 5000
+            }
+
+            try {
                 if (connection.responseCode == HttpURLConnection.HTTP_OK) {
                     val body = connection.inputStream.bufferedReader().readText()
-                    // Parse "tag_name" from JSON without a full JSON library
                     val match = Regex(""""tag_name"\s*:\s*"([^"]+)"""").find(body)
                     val tag = match?.groupValues?.get(1)?.trimStart('v', 'V')
 
@@ -53,26 +103,57 @@ class UpdateChecker(
                         latestVersion = tag
                         updateAvailable = isNewer(tag, currentVersion)
 
-                        if (updateAvailable) {
-                            plugin.logger.info("════════════════════════════════════════")
-                            plugin.logger.info("  Update available: v$currentVersion → v$tag")
-                            plugin.logger.info("  https://modrinth.com/plugin/yotpa")
-                            plugin.logger.info("════════════════════════════════════════")
-                        } else {
-                            plugin.logger.info("YoTPA is up to date (v$currentVersion)")
+                        if (isStartup) {
+                            // Startup: always log whether an update was found or not
+                            if (updateAvailable) {
+                                plugin.logger.info("════════════════════════════════════════")
+                                plugin.logger.info("  Update available: v$currentVersion → v$tag")
+                                plugin.logger.info("  https://modrinth.com/plugin/yotpa")
+                                plugin.logger.info("════════════════════════════════════════")
+                            } else {
+                                plugin.logger.info("YoTPA is up to date (v$currentVersion)")
+                            }
+                        } else if (updateAvailable && tag != notifiedVersion) {
+                            // Daily check: only act when a version we haven't seen before is found
+                            notifiedVersion = tag
+                            plugin.logger.info("[YoTPA] New version available: v$currentVersion → v$tag")
+                            notifyOnlineOps(tag)
                         }
+                        // Daily check + no new version = completely silent
                     }
                 } else {
                     plugin.logger.warning("Update check failed: HTTP ${connection.responseCode}")
                 }
-
+            } finally {
                 connection.disconnect()
-            } catch (e: IOException) {
-                plugin.logger.log(Level.WARNING, "Could not check for updates: ${e.message}")
             }
-        })
+        } catch (e: IOException) {
+            plugin.logger.log(Level.WARNING, "Could not check for updates: ${e.message}")
+        }
     }
 
+    // ─── Notifications ────────────────────────────────────────────────────────
+
+    /** Notify all currently online OPs/admins immediately when a new version is detected. */
+    private fun notifyOnlineOps(latest: String) {
+        if (YoTPA.isFolia) {
+            plugin.server.globalRegionScheduler.run(plugin) { _ ->
+                plugin.server.onlinePlayers
+                    .filter { it.hasPermission("yotpa.admin") || it.isOp }
+                    .forEach { player ->
+                        player.scheduler.run(plugin, { _ -> notifyPlayer(player, latest) }, null)
+                    }
+            }
+        } else {
+            plugin.server.scheduler.runTask(plugin, Runnable {
+                plugin.server.onlinePlayers
+                    .filter { it.hasPermission("yotpa.admin") || it.isOp }
+                    .forEach { notifyPlayer(it, latest) }
+            })
+        }
+    }
+
+    /** Notify a joining OP/admin if an update is already known. */
     @EventHandler
     fun onPlayerJoin(event: PlayerJoinEvent) {
         val player = event.player
@@ -80,9 +161,13 @@ class UpdateChecker(
         if (!updateAvailable) return
 
         val latest = latestVersion ?: return
-        plugin.server.scheduler.runTaskLater(plugin, Runnable {
-            notifyPlayer(player, latest)
-        }, 40L) // 2-second delay so the player fully loads in
+        if (YoTPA.isFolia) {
+            player.scheduler.runDelayed(plugin, { _ -> notifyPlayer(player, latest) }, null, 40L)
+        } else {
+            plugin.server.scheduler.runTaskLater(plugin, Runnable {
+                notifyPlayer(player, latest)
+            }, 40L)
+        }
     }
 
     private fun notifyPlayer(player: Player, latest: String) {
@@ -96,10 +181,8 @@ class UpdateChecker(
         player.playSound(player.location, "minecraft:block.note_block.pling", 1.0f, 1.0f)
     }
 
-    /**
-     * Returns true if [candidate] is a newer semantic version than [current].
-     * Handles versions like "1.5.0", "2.0", "26.1.1" etc.
-     */
+    // ─── Version comparison ───────────────────────────────────────────────────
+
     private fun isNewer(candidate: String, current: String): Boolean {
         val c = candidate.split(".").map { it.toIntOrNull() ?: 0 }
         val r = current.split(".").map { it.toIntOrNull() ?: 0 }

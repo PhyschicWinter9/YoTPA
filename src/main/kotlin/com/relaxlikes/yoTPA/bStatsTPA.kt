@@ -1,5 +1,6 @@
 package com.relaxlikes.yoTPA
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import org.bstats.bukkit.Metrics
 import org.bstats.charts.MultiLineChart
 import org.bstats.charts.SimplePie
@@ -8,7 +9,11 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.collections.HashMap
 
 
-class bStatsTPA(private val plugin: YoTPA) {
+class BStatsTPA(private val plugin: YoTPA) {
+
+    // Stored so it can be cancelled on plugin disable
+    private var dailyResetTask: ScheduledTask? = null
+    private var dailyResetTaskId: Int = -1
 
     // Counters for all-time statistics
     private val requestsSent = AtomicInteger(0)
@@ -62,7 +67,7 @@ class bStatsTPA(private val plugin: YoTPA) {
 
         // Title display enabled/disabled
         metrics.addCustomChart(SimplePie("titles_enabled") {
-            if (plugin.config.getBoolean("titles.enabled", true)) "Enabled" else "Disabled"
+            if (plugin.config.getBoolean("features.titles", true)) "Enabled" else "Disabled"
         })
 
         // Request timeout setting
@@ -147,16 +152,22 @@ class bStatsTPA(private val plugin: YoTPA) {
         val midnightMillis = calendar.timeInMillis
         val delayTicks = (midnightMillis - currentTimeMillis) / 50
 
-        // Schedule the reset task
-        plugin.server.scheduler.scheduleSyncRepeatingTask(plugin, {
-            // Reset all daily counters
+        val resetTask = Runnable {
             dailyRequestsSent.set(0)
             dailyRequestsAccepted.set(0)
             dailyRequestsDenied.set(0)
             dailyRequestsExpired.set(0)
-
             plugin.logger.info("Daily teleport statistics have been reset")
-        }, delayTicks, 1728000) // 24 hours in ticks (20tps * 60s * 60m * 24h)
+        }
+
+        // Schedule the reset task and store the handle for cancellation on disable
+        if (YoTPA.isFolia) {
+            dailyResetTask = plugin.server.globalRegionScheduler.runAtFixedRate(plugin, { _ ->
+                resetTask.run()
+            }, delayTicks, 1728000)
+        } else {
+            dailyResetTaskId = plugin.server.scheduler.scheduleSyncRepeatingTask(plugin, resetTask, delayTicks, 1728000)
+        }
     }
 
     /**
@@ -225,6 +236,13 @@ class bStatsTPA(private val plugin: YoTPA) {
             (requestsAccepted.get().toDouble() / sent * 100).toInt()
         } else {
             0
+        }
+    }
+
+    fun shutdown() {
+        dailyResetTask?.cancel()
+        if (dailyResetTaskId != -1) {
+            runCatching { plugin.server.scheduler.cancelTask(dailyResetTaskId) }
         }
     }
 }

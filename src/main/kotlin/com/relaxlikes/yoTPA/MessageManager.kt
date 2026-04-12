@@ -35,10 +35,18 @@ class MessageManager(private val plugin: JavaPlugin) {
     }
 
     /**
-     * Load or reload messages from the configuration file
+     * Load or reload messages from the configuration file.
+     * Any key missing from the server's messages.yml falls back to the bundled default,
+     * so new keys added in plugin updates are always available without manual migration.
      */
     fun loadMessages() {
         messagesConfig = YamlConfiguration.loadConfiguration(messagesFile)
+
+        // Merge bundled defaults — keys absent in the server file fall through to the JAR resource
+        plugin.getResource("messages.yml")?.bufferedReader()?.use { reader ->
+            val defaults = YamlConfiguration.loadConfiguration(reader)
+            messagesConfig.setDefaults(defaults)
+        }
 
         // Parse and cache the prefix
         val prefixString = messagesConfig.getString("prefix") ?: "<green><bold>[<aqua>YoTPA</aqua>]</bold></green> "
@@ -191,9 +199,19 @@ class MessageManager(private val plugin: JavaPlugin) {
     }
     fun getTeleportSuccess(target: String) = getMessageWithPrefix("teleport.success", mapOf("target" to target))
     fun getTeleportCancelledMovement() = getMessageWithPrefix("teleport.cancelled.movement")
+    fun getTeleportCancelledDestinationOffline() = getMessageWithPrefix("teleport.cancelled.destination-offline")
     fun getTeleportCancelledGeneral() = getMessageWithPrefix("teleport.cancelled.general")
     fun getTeleportExpiredSender(target: String) = getMessageWithPrefix("teleport.expired.sender", mapOf("target" to target))
     fun getTeleportExpiredReceiver(requester: String) = getMessageWithPrefix("teleport.expired.receiver", mapOf("requester" to requester))
+
+    // Back Command Messages
+    fun getBackNoLocation() = getMessageWithPrefix("commands.back.no-location")
+    fun getBackTeleporting() = getMessageWithPrefix("commands.back.teleporting")
+    fun getBackDeathSaved() = getMessageWithPrefix("commands.back.death-saved")
+    fun getBackCooldown(cooldown: Long): Component {
+        val plural = if (cooldown != 1L) "s" else ""
+        return getMessageWithPrefix("commands.back.cooldown", mapOf("cooldown" to cooldown.toString(), "plural" to plural))
+    }
 
     // Error Messages
     fun getPlayerNotFound(player: String) = getMessageWithPrefix("errors.player-not-found", mapOf("player" to player))

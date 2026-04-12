@@ -1,7 +1,7 @@
 // ── Server config ──────────────────────────────────────────────
 export const SERVER = {
-  host: "203.159.92.198", // replace with your server IP or hostname
-  port: 25595,              // replace with your server port if not default
+  host: "localhost", // replace with your server IP or hostname
+  port: 25565,              // replace with your server port if not default
   // Version mineflayer will handshake with.
   // ViaBackward on the server lets older clients in, so use the
   // latest version mineflayer actually supports (check `mineflayer`

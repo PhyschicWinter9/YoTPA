@@ -21,7 +21,7 @@ export const BOT_NAMES = [
 
 // ── YoTPA plugin version check ─────────────────────────────────
 export const PLUGIN = {
-  currentVersion: '1.5.1',
+  currentVersion: '1.6.0',
   githubRepo: 'PhyschicWinter9/YoTPA',
 };
 

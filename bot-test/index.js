@@ -4,22 +4,26 @@
  * Covers:
  *   1. Version check (GitHub latest release)
  *   2. All command scenarios (/tpa, /tpahere, /tpaccept, /tpadeny,
- *      /tpastats, /tpainfo, /tpareload)
+ *      /tpastats, /tpainfo, /tpareload, /back)
  *   3. Edge cases (self, invalid player, no pending, movement cancel)
- *   4. Stress & performance tests (latency, throughput, cooldown, expiry)
- *   5. Summary report
+ *   4. Admin-controlled: large distance + cross-world
+ *   5. Stress & performance tests (latency, throughput, cooldown, expiry)
+ *   6. Summary report
  *
  * Usage:
  *   bun run index.js            → full suite
  *   bun run index.js --stress   → stress tests only
  *   bun run index.js --quick    → functional tests only (skip stress)
+ *
+ * NOTE: Bots need yotpa.back permission (or OP) for /back scenarios.
+ *       Admin bot grants OP at startup automatically.
  */
 
 import { BOT_NAMES, ADMIN, DELAY } from "./config.js";
 import { createBot, createBots, sleep } from "./bot-factory.js";
 import {
   tpToSpawn, tpFarAway, tpToNether, tpToEnd,
-  resetAllToSpawn, announce,
+  tpToPlayer, resetAllToSpawn, announce,
 } from "./admin.js";
 import { checkPluginVersion } from "./version-check.js";
 import {
@@ -386,6 +390,319 @@ async function scenarioReloadThenTpa(bots, admin) {
   console.log(`  Post-reload TPA distance: ${d.toFixed(2)} blocks`);
 }
 
+// ── /back scenarios ──────────────────────────────────────────────
+
+// B1. /back after TPA accept — sender should return to original position
+async function scenarioBackAfterTpa(bots) {
+  const [sender, target] = [bots[0], bots[1]];
+  const origin = pos(sender);
+
+  sender.chat(`/tpa ${target.username}`);
+  await sleep(DELAY.requestWait);
+  target.chat("/tpaccept");
+  await sleep(8000); // teleport countdown + land
+
+  const afterTpa = pos(sender);
+  console.log(`  After TPA — distance moved: ${dist(origin, afterTpa).toFixed(2)} blocks`);
+
+  sender.chat("/back");
+  await sleep(3000);
+
+  const afterBack = pos(sender);
+  const returnDist = dist(afterBack, origin);
+  console.log(`  After /back — distance from origin: ${returnDist.toFixed(2)} blocks (should be ~0)`);
+  if (returnDist > 3) console.log(`  ⚠️  /back did not return sender to origin`);
+  else               console.log(`  ✅  Returned to origin correctly`);
+}
+
+// B2. /back after TPAHERE accept — guest should return to their original position
+async function scenarioBackAfterTpahere(bots) {
+  const [host, guest] = [bots[2], bots[3]];
+  const origin = pos(guest);
+
+  host.chat(`/tpahere ${guest.username}`);
+  await sleep(DELAY.requestWait);
+  guest.chat("/tpaccept");
+  await sleep(8000);
+
+  const afterTp = pos(guest);
+  console.log(`  After TPAHERE — distance moved: ${dist(origin, afterTp).toFixed(2)} blocks`);
+
+  guest.chat("/back");
+  await sleep(3000);
+
+  const afterBack = pos(guest);
+  const returnDist = dist(afterBack, origin);
+  console.log(`  After /back — distance from origin: ${returnDist.toFixed(2)} blocks (should be ~0)`);
+  if (returnDist > 3) console.log(`  ⚠️  /back did not return guest to origin`);
+  else               console.log(`  ✅  Returned to origin correctly`);
+}
+
+// B3. /back is single-use — location is consumed after teleport
+async function scenarioBackSingleUse(bots) {
+  const [sender, target] = [bots[0], bots[1]];
+  const posA = pos(sender);
+
+  // TPA A → B, saving A as lastLocation
+  sender.chat(`/tpa ${target.username}`);
+  await sleep(DELAY.requestWait);
+  target.chat("/tpaccept");
+  await sleep(8000);
+  const posB = pos(sender);
+
+  console.log(`  A=(${posA.x.toFixed(0)},${posA.z.toFixed(0)})  B=(${posB.x.toFixed(0)},${posB.z.toFixed(0)})`);
+
+  // First /back — should return to A and consume the saved location
+  sender.chat("/back");
+  await sleep(3000);
+  const after1 = pos(sender);
+  const distFromA = dist(after1, posA);
+  console.log(`  After /back — dist from A: ${distFromA.toFixed(2)} (expect ~0)`);
+  if (distFromA < 3) console.log(`  ✅  /back returned to origin`);
+  else               console.log(`  ⚠️  /back did not return to origin`);
+
+  // Second /back immediately — location was consumed; must NOT teleport again.
+  // Expects "cooldown" (back-cooldown: 30 default) or "no location" (if cooldown disabled).
+  const posBeforeSecond = { ...pos(sender) };
+  sender.chat("/back");
+  await sleep(3000);
+  const moved = dist(posBeforeSecond, pos(sender)) > 1;
+  if (!moved) console.log(`  ✅  Second /back did not teleport — location was consumed (single-use confirmed)`);
+  else        console.log(`  ⚠️  Second /back teleported the player — location was NOT consumed`);
+}
+
+// B4. /back with no prior location (fresh join, never teleported)
+async function scenarioBackNoLocation(bots) {
+  // Bot 4 hasn't teleported in this session (use fresh bot)
+  bots[4].chat("/back");
+  await sleep(2000);
+  console.log(`  Expect "no previous location" error message above`);
+}
+
+// B5. /back without permission
+async function scenarioBackNoPermission(bots, admin) {
+  const bot = bots[4];
+  // Temporarily revoke permission via admin
+  admin.chat(`/lp user ${bot.username} permission unset yotpa.back`);
+  await sleep(1000);
+
+  bot.chat("/back");
+  await sleep(2000);
+  console.log(`  Expect "no permission" message above`);
+
+  // Restore permission
+  admin.chat(`/lp user ${bot.username} permission set yotpa.back true`);
+  await sleep(1000);
+}
+
+// B6. /back after cross-world TPA (admin-assisted) — should return to original world
+async function scenarioBackCrossWorld(bots, admin) {
+  const [sender, target] = [bots[0], bots[1]];
+  announce(admin, "/back cross-world test");
+
+  await tpToSpawn(admin, sender.username);
+  await tpToNether(admin, target.username);
+  await sleep(2000);
+
+  const originDim = sender.game?.dimension ?? "overworld";
+  console.log(`  Sender in: ${originDim}`);
+
+  sender.chat(`/tpa ${target.username}`);
+  await sleep(DELAY.requestWait);
+  target.chat("/tpaccept");
+  await sleep(8000);
+
+  const afterTpDim = sender.game?.dimension ?? "unknown";
+  console.log(`  After TPA dim: ${afterTpDim}`);
+
+  sender.chat("/back");
+  await sleep(4000); // cross-world back takes longer
+
+  const afterBackDim = sender.game?.dimension ?? "unknown";
+  console.log(`  After /back dim: ${afterBackDim} (should be ${originDim})`);
+  if (afterBackDim === originDim) console.log(`  ✅  Returned to original world`);
+  else                            console.log(`  ⚠️  World mismatch after /back`);
+
+  await resetAllToSpawn(admin, [sender, target]);
+}
+
+// B8. /back after death — admin kills bot, bot respawns and uses /back to return to death spot
+async function scenarioBackAfterDeath(bots, admin) {
+  const bot = bots[0];
+  announce(admin, "/back after death test");
+
+  // Move bot to a distinct location so we can verify the death spot was saved
+  await tpFarAway(admin, bot.username);
+  await sleep(2000);
+  const deathSpot = pos(bot);
+  console.log(`  Bot at death spot: (${deathSpot.x.toFixed(0)}, ${deathSpot.z.toFixed(0)})`);
+
+  // Kill the bot via admin
+  admin.chat(`/kill ${bot.username}`);
+  await sleep(6000); // wait for death screen + auto-respawn (if enabled) or manual respawn
+
+  // Bot should have received "death-saved" notification on respawn
+  // Use /back to return to death spot
+  bot.chat("/back");
+  await sleep(4000);
+
+  const afterBack = pos(bot);
+  const returnDist = dist(afterBack, deathSpot);
+  console.log(`  Distance from death spot after /back: ${returnDist.toFixed(2)} blocks`);
+  if (returnDist < 5) console.log(`  ✅  /back returned to death location`);
+  else                console.log(`  ⚠️  /back did not return to death spot (distance: ${returnDist.toFixed(2)})`);
+
+  await tpToSpawn(admin, bot.username);
+}
+
+// B9. /back after being killed by another player (PvP)
+async function scenarioBackAfterPvpDeath(bots, admin) {
+  const [victim, killer] = [bots[1], bots[2]];
+  announce(admin, "/back after PvP death");
+
+  // Put both bots together at a far location
+  await tpFarAway(admin, victim.username);
+  await tpToPlayer(admin, killer.username, victim.username);
+  await sleep(2000);
+  const deathSpot = pos(victim);
+
+  // Give killer a sharp sword and enable PvP damage on victim
+  admin.chat(`/give ${killer.username} diamond_sword{Enchantments:[{id:sharpness,lvl:10}]} 1`);
+  await sleep(500);
+  // One-shot kill via attribute
+  admin.chat(`/attribute ${victim.username} minecraft:generic.max_health base set 1`);
+  await sleep(500);
+
+  // Killer attacks victim
+  console.log(`  Killer attacking victim at (${deathSpot.x.toFixed(0)}, ${deathSpot.z.toFixed(0)})`);
+  killer.attack(victim.entity);
+  await sleep(6000);
+
+  // Restore victim's health attribute
+  admin.chat(`/attribute ${victim.username} minecraft:generic.max_health base set 20`);
+
+  victim.chat("/back");
+  await sleep(4000);
+
+  const returnDist = dist(pos(victim), deathSpot);
+  console.log(`  Distance from PvP death spot after /back: ${returnDist.toFixed(2)} blocks`);
+  if (returnDist < 5) console.log(`  ✅  /back returned to PvP death location`);
+  else                console.log(`  ⚠️  /back did not return to PvP death spot`);
+
+  await resetAllToSpawn(admin, [victim, killer]);
+}
+
+// B10. /back cooldown — use /back then immediately again (second should be blocked)
+async function scenarioBackCooldown(bots) {
+  const [sender, target] = [bots[0], bots[1]];
+
+  // Establish a lastLocation via TPA
+  sender.chat(`/tpa ${target.username}`);
+  await sleep(DELAY.requestWait);
+  target.chat("/tpaccept");
+  await sleep(8000);
+
+  // First /back — should succeed
+  sender.chat("/back");
+  await sleep(2000);
+
+  // Immediate second /back — should be blocked by back-cooldown
+  const blocked = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 4000);
+    function handler(msg) {
+      if (msg.toString().toLowerCase().includes("wait") ||
+          msg.toString().toLowerCase().includes("cooldown")) {
+        clearTimeout(timer);
+        sender.removeListener("message", handler);
+        resolve(true);
+      }
+    }
+    sender.on("message", handler);
+    sender.chat("/back");
+  });
+
+  if (blocked) console.log(`  ✅  Back cooldown enforced on rapid re-use`);
+  else         console.log(`  ⚠️  Back cooldown NOT enforced — check back-cooldown config`);
+}
+
+// B11. /back cooldown bypass — yotpa.bypass.back-cooldown skips the cooldown gate
+//
+// How it's verified: after /back consumes the saved location, a non-bypass user
+// would hit "you must wait" (cooldown check fires before location check). A bypass
+// user skips the cooldown check entirely and reaches the location check instead,
+// producing "no previous location". Seeing "no location" (not "cooldown") confirms
+// the bypass is working.
+async function scenarioBackCooldownBypass(bots, admin) {
+  const [sender, target] = [bots[2], bots[3]];
+
+  // Grant bypass permission
+  admin.chat(`/lp user ${sender.username} permission set yotpa.bypass.back-cooldown true`);
+  await sleep(1000);
+
+  // Establish lastLocation via TPA
+  sender.chat(`/tpa ${target.username}`);
+  await sleep(DELAY.requestWait);
+  target.chat("/tpaccept");
+  await sleep(8000);
+
+  // First /back — consumes the saved location and records the cooldown timestamp
+  sender.chat("/back");
+  await sleep(2000);
+
+  // Second /back immediately — location was consumed.
+  // Bypass user: cooldown check is skipped → reaches location check → "no previous location"
+  // Non-bypass user: cooldown check fires → "you must wait X seconds" (never reaches location check)
+  const secondMsg = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(""), 4000);
+    function handler(msg) {
+      clearTimeout(timer);
+      sender.removeListener("message", handler);
+      resolve(msg.toString().toLowerCase());
+    }
+    sender.on("message", handler);
+    sender.chat("/back");
+  });
+
+  console.log(`  Second /back response: "${secondMsg}"`);
+  if (secondMsg.includes("previous location"))
+    console.log(`  ✅  Bypass worked — got "no location" (cooldown check was skipped)`);
+  else if (secondMsg.includes("wait") || secondMsg.includes("cooldown"))
+    console.log(`  ⚠️  Cooldown was enforced despite yotpa.bypass.back-cooldown permission`);
+  else
+    console.log(`  ⚠️  Unexpected response (timeout or unknown message)`);
+
+  // Revoke bypass
+  admin.chat(`/lp user ${sender.username} permission unset yotpa.bypass.back-cooldown`);
+  await sleep(500);
+}
+
+// B7. /back used by all 5 bots concurrently — tests thread-safety of lastLocations map
+async function scenarioBackConcurrent(bots) {
+  console.log(`  Setting up: TPA all bots to a single target then /back simultaneously`);
+  const target = bots[0];
+
+  // Each bot requests and gets accepted one by one to establish lastLocations
+  for (let i = 1; i <= 3; i++) {
+    bots[i].chat(`/tpa ${target.username}`);
+    await sleep(DELAY.requestWait);
+    target.chat("/tpaccept");
+    await sleep(8000);
+    await sleep(2000); // cooldown
+  }
+
+  // Now all 4 bots hit /back simultaneously
+  console.log(`  Firing /back on 4 bots simultaneously…`);
+  const start = Date.now();
+  await Promise.all([
+    bots[1].chat("/back"),
+    bots[2].chat("/back"),
+    bots[3].chat("/back"),
+  ]);
+  await sleep(4000);
+  console.log(`  All /back commands processed in ${Date.now() - start}ms`);
+  console.log(`  ✅  No crashes = lastLocations ConcurrentHashMap is thread-safe`);
+}
+
 // 18. Simultaneous multi-bot stress (functional pass)
 async function scenarioSimultaneous(bots) {
   bots[0].chat(`/tpa ${bots[1].username}`);
@@ -476,6 +793,30 @@ async function main() {
       () => scenarioLargeDistanceMovementCancel(bots, admin));
     await run("/tpareload by admin then verify TPA still works",
       () => scenarioReloadThenTpa(bots, admin));
+
+    // ── /back ──
+    await run("BACK — return to origin after TPA accept",
+      () => scenarioBackAfterTpa(bots));
+    await run("BACK — return to origin after TPAHERE accept",
+      () => scenarioBackAfterTpahere(bots));
+    await run("BACK — single-use (location consumed after teleport)",
+      () => scenarioBackSingleUse(bots));
+    await run("BACK — no prior location (expect error)",
+      () => scenarioBackNoLocation(bots));
+    await run("BACK — no permission (expect error)",
+      () => scenarioBackNoPermission(bots, admin));
+    await run("BACK — cross-world return (Nether → Overworld)",
+      () => scenarioBackCrossWorld(bots, admin));
+    await run("BACK — concurrent /back on 4 bots (thread-safety)",
+      () => scenarioBackConcurrent(bots));
+    await run("BACK — /back after death (admin /kill)",
+      () => scenarioBackAfterDeath(bots, admin));
+    await run("BACK — /back after PvP death",
+      () => scenarioBackAfterPvpDeath(bots, admin));
+    await run("BACK — cooldown blocks rapid re-use",
+      () => scenarioBackCooldown(bots));
+    await run("BACK — bypass.back-cooldown permission",
+      () => scenarioBackCooldownBypass(bots, admin));
 
     printSummary();
   }

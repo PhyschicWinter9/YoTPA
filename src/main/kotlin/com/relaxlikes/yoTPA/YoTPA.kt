@@ -7,16 +7,17 @@ import org.bukkit.Bukkit
 import org.bukkit.Location
 import org.bukkit.NamespacedKey
 import org.bukkit.Registry
+import org.bukkit.Sound
 import org.bukkit.command.Command
 import org.bukkit.command.CommandSender
 import org.bukkit.entity.Player
-import org.bukkit.persistence.PersistentDataType
 import org.bukkit.plugin.java.JavaPlugin
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.logging.Level
 
 class YoTPA : JavaPlugin() {
@@ -31,65 +32,109 @@ class YoTPA : JavaPlugin() {
         }
     }
 
-    // Version is read from plugin.yml at runtime (injected by processResources from VersionConfig.PLUGIN_pluginVersion)
     val pluginVersion: String get() = pluginMeta.version
 
-    // Performance mode enum
+    // ─── Performance mode ─────────────────────────────────────────────────────
+
     enum class PerformanceMode {
-        AUTO,           // Auto-detect based on available RAM
-        ULTRA_LIGHT,    // For 512 MB - 1 GB RAM
-        LIGHT,          // For 1-2 GB RAM
-        BALANCED,       // For 2-4 GB RAM (default)
-        HIGH_PERFORMANCE // For 4+ GB RAM
+        AUTO, ULTRA_LIGHT, LIGHT, BALANCED, HIGH_PERFORMANCE
     }
 
-    // Current performance mode
-    @Volatile private var performanceMode: PerformanceMode = PerformanceMode.AUTO
-    @Volatile private var detectedMode: PerformanceMode = PerformanceMode.BALANCED
+    @Volatile
+    private var performanceMode: PerformanceMode = PerformanceMode.AUTO
 
-    // Thread-safe data structures with adaptive sizing
+    @Volatile
+    private var detectedMode: PerformanceMode = PerformanceMode.BALANCED
+
+    // ─── Thread-safe data structures ─────────────────────────────────────────
+    // All maps are ConcurrentHashMap — safe for concurrent read/write from
+    // main thread, executor workers, and Folia region threads simultaneously.
+
     private lateinit var tpaRequests: ConcurrentHashMap<UUID, TpaRequest>
     private lateinit var cooldowns: ConcurrentHashMap<UUID, Long>
     private lateinit var teleportTasks: ConcurrentHashMap<UUID, ScheduledTask>
     private lateinit var teleportData: ConcurrentHashMap<UUID, TeleportData>
     private lateinit var playerNameCache: ConcurrentHashMap<UUID, String>
 
-    // PersistentDataContainer key for storing original locations
-    private lateinit var originalLocationKey: NamespacedKey
+    // In-memory location tracking — replaces PDC (no serialization overhead,
+    // no cross-restart pollution, O(1) lookup on every PlayerMoveEvent)
+    private lateinit var countdownOrigins: ConcurrentHashMap<UUID, Location>  // movement-cancel origin
+    private lateinit var lastLocations: ConcurrentHashMap<UUID, Location>      // /back destination
+    private lateinit var backCooldowns: ConcurrentHashMap<UUID, Long>          // /back cooldown timestamps
 
-    // Configuration values
-    @Volatile private var requestTimeout = 60
-    @Volatile private var requestCooldown = 30
-    @Volatile private var teleportDelay = 5
+    // ─── Configuration values (volatile — written on main thread, read anywhere)
 
-    // Sound keys - store as NamespacedKey instead of Sound
-    @Volatile private var countdownSoundKey = NamespacedKey.minecraft("block.note_block.pling")
-    @Volatile private var successSoundKey = NamespacedKey.minecraft("entity.enderman.teleport")
-    @Volatile private var cancelSoundKey = NamespacedKey.minecraft("entity.villager.no")
-    @Volatile private var requestSoundKey = NamespacedKey.minecraft("entity.experience_orb.pickup")
+    @Volatile
+    private var requestTimeout = 60
 
-    // Cached title components
-    private val titleCache by lazy { CachedTitleComponents() }
+    @Volatile
+    private var requestCooldown = 30
 
-    // Cached performance settings — written only from main thread (onEnable/reload), read from any thread
-    @Volatile private var cachedSettings: PerformanceSettings? = null
+    @Volatile
+    private var teleportDelay = 5
+
+    @Volatile
+    private var backCooldown = 30
+
+    @Volatile
+    private var soundsEnabled = true
+
+    @Volatile
+    private var titlesEnabled = true
+
+    // Sound keys AND resolved Sound objects — keys used for display/config,
+    // resolved Sound cached once at load so playSound() needs zero registry lookups.
+    @Volatile
+    private var countdownSoundKey = NamespacedKey.minecraft("block.note_block.pling")
+
+    @Volatile
+    private var successSoundKey = NamespacedKey.minecraft("entity.enderman.teleport")
+
+    @Volatile
+    private var cancelSoundKey = NamespacedKey.minecraft("entity.villager.no")
+
+    @Volatile
+    private var requestSoundKey = NamespacedKey.minecraft("entity.experience_orb.pickup")
+
+    @Volatile
+    private var countdownSound: Sound? = null
+
+    @Volatile
+    private var successSound: Sound? = null
+
+    @Volatile
+    private var cancelSound: Sound? = null
+
+    @Volatile
+    private var requestSound: Sound? = null
+
+    // Title.Times created once — immutable, allocation-free on every countdown tick
+    private val titleTimes: Title.Times = Title.Times.times(
+        java.time.Duration.ofMillis(250),
+        java.time.Duration.ofSeconds(6),
+        java.time.Duration.ofMillis(500)
+    )
+
+    // Cached performance settings — written only from main thread, read from any thread
+    @Volatile
+    private var cachedSettings: PerformanceSettings? = null
     private inline val settings: PerformanceSettings get() = cachedSettings ?: getPerformanceSettings()
 
-    // Single batch-countdown task ID for Paper mode (one task processes all active teleports)
+    // Paper batch countdown task (single repeating task for all active countdowns)
     private var paperBatchTaskId: Int = -1
 
-    // Executor service (nullable for ultra-light mode)
+    // Background executor (null in ULTRA_LIGHT mode)
     private var executor: ScheduledExecutorService? = null
 
+    // Monotonic counter for worker thread names — avoids the racy Thread.activeCount()
+    private val workerThreadCounter = AtomicInteger(0)
+
     private lateinit var bStats: BStatsTPA
-
-    // Message manager for customizable messages
     private lateinit var messageManager: MessageManager
-
-    // Update checker
     private lateinit var updateChecker: UpdateChecker
 
-    // Performance settings based on mode
+    // ─── Data classes ─────────────────────────────────────────────────────────
+
     private data class PerformanceSettings(
         val useExecutor: Boolean,
         val executorThreads: Int,
@@ -105,72 +150,59 @@ class YoTPA : JavaPlugin() {
     )
 
     data class TeleportData(
-        val destination: Player,
+        // Store UUID, not Player — avoids zombie Player references (Golden Rule #2)
+        // and cross-region Player access on Folia. Player is resolved fresh each tick.
+        val destinationUUID: UUID,
         val startTime: Long,
         val duration: Int,
-        var lastShownSecond: Int = -1
+        // @Volatile: processCountdown may run from different Folia region threads across ticks
+        @Volatile var lastShownSecond: Int = -1
     )
 
     data class TpaRequest(
         val requesterUUID: UUID,
         val targetUUID: UUID,
         val timestamp: Long,
-        val isHereRequest: Boolean
+        val isHereRequest: Boolean,
+        // Captured on the main thread at request creation so checkExpiredRequests() can
+        // honour bypass.timeout without touching the Bukkit API from an executor thread.
+        val bypassTimeout: Boolean = false
     )
 
-    private data class CachedTitleComponents(
-        val titleTimes: Title.Times = Title.Times.times(
-            java.time.Duration.ofMillis(250),
-            java.time.Duration.ofSeconds(6),
-            java.time.Duration.ofMillis(500)
-        )
-    )
+    // ─── Lifecycle ────────────────────────────────────────────────────────────
 
     override fun onEnable() {
-        // Initialize PersistentDataContainer key
-        originalLocationKey = NamespacedKey(this, "original_location")
-
-        // Load configuration first
         saveDefaultConfig()
+        reloadConfig()
         loadConfig()
 
-        // Detect and apply performance mode, then cache settings once
         detectAndApplyPerformanceMode()
         cachedSettings = getPerformanceSettings()
 
-        // Initialize data structures with adaptive sizing
         initializeDataStructures()
-
-        // Initialize executor if needed
         initializeExecutor()
 
-        // Initialize message manager
         messageManager = MessageManager(this)
         messageManager.initialize()
 
-        // Initialize bStats
         bStats = BStatsTPA(this)
         bStats.initialize()
 
-        // Initialize update checker
         updateChecker = UpdateChecker(this, pluginVersion, "PhyschicWinter9/YoTPA")
         updateChecker.check()
 
-        // Register commands and events
         registerCommands()
-        server.pluginManager.registerEvents(PlayerMoveListener(this, getMovementThreshold()), this)
+        // PlayerMoveListener reads movementThreshold directly from plugin.getMovementThreshold()
+        // so it always reflects the current value after /tpareload — no stale capture
+        server.pluginManager.registerEvents(PlayerMoveListener(plugin = this), this)
         server.pluginManager.registerEvents(updateChecker, this)
 
-        // Start maintenance tasks
         startMaintenanceTasks()
 
-        // On Paper: one batch task drives ALL active countdowns (O(1) scheduler overhead)
-        // On Folia: per-entity tasks are used instead (scheduled in startTeleportCountdown)
-        if (!isFolia) {
-            startPaperBatchTask()
-        }
+        // Paper: one batch task drives all active countdowns — O(1) scheduler overhead
+        // Folia: per-entity tasks are started in startTeleportCountdown instead
+        if (!isFolia) startPaperBatchTask()
 
-        // Log startup info
         logger.info("═══════════════════════════════════════")
         logger.info("YoTPA Developer: PhyschicWinter9 & VIBEs Coding XD")
         logger.info("YoTPA Version: $pluginVersion")
@@ -180,14 +212,12 @@ class YoTPA : JavaPlugin() {
     }
 
     override fun onDisable() {
-        // Cancel active teleport tasks
         if (isFolia) {
             teleportTasks.values.forEach { task -> runCatching { task.cancel() } }
         } else if (paperBatchTaskId != -1) {
             runCatching { Bukkit.getScheduler().cancelTask(paperBatchTaskId) }
         }
 
-        // Shutdown executor service if exists
         executor?.let { exec ->
             exec.shutdown()
             try {
@@ -203,86 +233,32 @@ class YoTPA : JavaPlugin() {
             }
         }
 
-        // Cancel bStats daily reset task
         bStats.shutdown()
-
-        // Clear all data
+        updateChecker.shutdown()
         clearAllData()
 
         logger.info("YoTPA plugin has been disabled!")
     }
 
-    /**
-     * Store player's original location in their PersistentDataContainer
-     */
-    private fun storeOriginalLocation(player: Player, location: Location) {
-        // Serialize location to string
-        val locString = "${location.world?.name},${location.x},${location.y},${location.z},${location.yaw},${location.pitch}"
+    // ─── Countdown origin tracking (in-memory) ────────────────────────────────
+    // Previously stored in PersistentDataContainer (PDC), which:
+    //   • serialised/deserialised a Location string on every PlayerMoveEvent
+    //   • persisted entries across server restarts (crash = stale data forever)
+    // ConcurrentHashMap gives O(1) lookups with zero serialisation cost.
 
-        player.persistentDataContainer.set(
-            originalLocationKey,
-            PersistentDataType.STRING,
-            locString
-        )
+    /** Called by PlayerMoveListener — must be fast, called on every position change. */
+    fun getCountdownOrigin(player: Player): Location? = countdownOrigins[player.uniqueId]
+
+    private fun storeCountdownOrigin(uuid: UUID, location: Location) {
+        countdownOrigins[uuid] = location
     }
 
-    /**
-     * Get player's original location from PersistentDataContainer
-     * Returns null if not found or invalid
-     *
-     * Note: Used by PlayerMoveListener for movement detection
-     */
-    fun getOriginalLocation(player: Player): Location? {
-        val locString = player.persistentDataContainer.get(
-            originalLocationKey,
-            PersistentDataType.STRING
-        ) ?: return null
-
-        return deserializeLocation(locString)
+    private fun removeCountdownOrigin(uuid: UUID) {
+        countdownOrigins.remove(uuid)
     }
 
-    /**
-     * Get original location by UUID
-     *
-     * Note: Used by PlayerMoveListener for movement detection
-     */
-    fun getOriginalLocation(uuid: UUID): Location? {
-        val player = Bukkit.getPlayer(uuid) ?: return null
-        return getOriginalLocation(player)
-    }
+    // ─── Performance mode detection ───────────────────────────────────────────
 
-    /**
-     * Remove original location from PersistentDataContainer
-     */
-    private fun removeOriginalLocation(player: Player) {
-        player.persistentDataContainer.remove(originalLocationKey)
-    }
-
-
-    /**
-     * Deserialize location from string
-     */
-    private fun deserializeLocation(locString: String): Location? {
-        return try {
-            val parts = locString.split(",")
-            val world = Bukkit.getWorld(parts[0]) ?: return null
-            Location(
-                world,
-                parts[1].toDouble(),
-                parts[2].toDouble(),
-                parts[3].toDouble(),
-                parts[4].toFloat(),
-                parts[5].toFloat()
-            )
-        } catch (_: Exception) {
-            logger.warning("Failed to deserialize location: $locString")
-            null
-        }
-    }
-
-    /**
-     * Detect available RAM and set appropriate performance mode
-     */
     private fun detectAndApplyPerformanceMode() {
         val configMode = try {
             PerformanceMode.valueOf(config.getString("performance.mode", "AUTO")!!.uppercase())
@@ -295,10 +271,10 @@ class YoTPA : JavaPlugin() {
         detectedMode = if (configMode == PerformanceMode.AUTO) {
             val maxMemory = getMaxMemoryMB()
             when {
-                maxMemory <= 768 -> PerformanceMode.ULTRA_LIGHT  // ≤ 768 MB
-                maxMemory <= 1536 -> PerformanceMode.LIGHT       // ≤ 1.5 GB
-                maxMemory <= 3072 -> PerformanceMode.BALANCED    // ≤ 3 GB
-                else -> PerformanceMode.HIGH_PERFORMANCE         // > 3 GB
+                maxMemory <= 768 -> PerformanceMode.ULTRA_LIGHT
+                maxMemory <= 1536 -> PerformanceMode.LIGHT
+                maxMemory <= 3072 -> PerformanceMode.BALANCED
+                else -> PerformanceMode.HIGH_PERFORMANCE
             }
         } else {
             configMode
@@ -307,38 +283,32 @@ class YoTPA : JavaPlugin() {
         logger.info("Performance mode: $performanceMode (detected: $detectedMode)")
     }
 
-    /**
-     * Initialize data structures based on performance mode
-     */
     private fun initializeDataStructures() {
-        val settings = getPerformanceSettings()
+        val s = getPerformanceSettings()
 
-        tpaRequests = ConcurrentHashMap(settings.initialCapacity, settings.loadFactor, settings.concurrencyLevel)
-        cooldowns = ConcurrentHashMap(settings.initialCapacity * 2, settings.loadFactor, settings.concurrencyLevel)
-        teleportTasks = ConcurrentHashMap(settings.initialCapacity, settings.loadFactor, settings.concurrencyLevel)
+        tpaRequests = ConcurrentHashMap(s.initialCapacity, s.loadFactor, s.concurrencyLevel)
+        cooldowns = ConcurrentHashMap(s.initialCapacity * 2, s.loadFactor, s.concurrencyLevel)
+        teleportTasks = ConcurrentHashMap(s.initialCapacity, s.loadFactor, s.concurrencyLevel)
+        countdownOrigins = ConcurrentHashMap(s.initialCapacity, s.loadFactor, s.concurrencyLevel)
+        lastLocations = ConcurrentHashMap(s.initialCapacity, s.loadFactor, s.concurrencyLevel)
+        backCooldowns = ConcurrentHashMap(s.initialCapacity * 2, s.loadFactor, s.concurrencyLevel)
 
-        teleportData = if (settings.enableTeleportDataCache) {
-            ConcurrentHashMap(settings.initialCapacity, settings.loadFactor, settings.concurrencyLevel)
-        } else {
+        teleportData = if (s.enableTeleportDataCache)
+            ConcurrentHashMap(s.initialCapacity, s.loadFactor, s.concurrencyLevel)
+        else
             ConcurrentHashMap(4, 0.75f, 1)
-        }
 
-        playerNameCache = if (settings.enablePlayerCache) {
-            ConcurrentHashMap(settings.initialCapacity * 2, settings.loadFactor, settings.concurrencyLevel)
-        } else {
+        playerNameCache = if (s.enablePlayerCache)
+            ConcurrentHashMap(s.initialCapacity * 2, s.loadFactor, s.concurrencyLevel)
+        else
             ConcurrentHashMap(4, 0.75f, 1)
-        }
     }
 
-    /**
-     * Initialize executor service based on performance mode
-     */
     private fun initializeExecutor() {
-        val settings = getPerformanceSettings()
-
-        if (settings.useExecutor) {
-            executor = Executors.newScheduledThreadPool(settings.executorThreads) { runnable ->
-                Thread(runnable, "YoTPA-Worker-${Thread.activeCount()}").apply {
+        val s = getPerformanceSettings()
+        if (s.useExecutor) {
+            executor = Executors.newScheduledThreadPool(s.executorThreads) { runnable ->
+                Thread(runnable, "YoTPA-Worker-${workerThreadCounter.incrementAndGet()}").apply {
                     isDaemon = true
                     priority = Thread.NORM_PRIORITY
                 }
@@ -346,68 +316,68 @@ class YoTPA : JavaPlugin() {
         }
     }
 
-    /**
-     * Get performance settings based on detected mode
-     */
     private fun getPerformanceSettings(): PerformanceSettings {
         return when (detectedMode) {
             PerformanceMode.ULTRA_LIGHT -> PerformanceSettings(
-                useExecutor = false,
-                executorThreads = 0,
-                countdownInterval = 20L,
-                expirationInterval = 600L,      // 30s
-                cleanupInterval = 6000L,        // 5min
-                initialCapacity = 8,
-                loadFactor = 0.75f,
-                concurrencyLevel = 2,
-                enablePlayerCache = false,
-                enableTeleportDataCache = false,
-                movementThreshold = 0.5
+                useExecutor = false, executorThreads = 0,
+                countdownInterval = 20L, expirationInterval = 600L, cleanupInterval = 6000L,
+                initialCapacity = 8, loadFactor = 0.75f, concurrencyLevel = 2,
+                enablePlayerCache = false, enableTeleportDataCache = false, movementThreshold = 0.5
             )
+
             PerformanceMode.LIGHT -> PerformanceSettings(
-                useExecutor = true,
-                executorThreads = 2,
-                countdownInterval = 20L,
-                expirationInterval = 400L,      // 20s
-                cleanupInterval = 4800L,        // 4min
-                initialCapacity = 16,
-                loadFactor = 0.75f,
-                concurrencyLevel = 2,
-                enablePlayerCache = true,
-                enableTeleportDataCache = false,
-                movementThreshold = 0.4
+                useExecutor = true, executorThreads = 2,
+                countdownInterval = 20L, expirationInterval = 400L, cleanupInterval = 4800L,
+                initialCapacity = 16, loadFactor = 0.75f, concurrencyLevel = 2,
+                enablePlayerCache = true, enableTeleportDataCache = false, movementThreshold = 0.4
             )
+
             PerformanceMode.BALANCED -> PerformanceSettings(
-                useExecutor = true,
-                executorThreads = 3,
-                countdownInterval = 20L,
-                expirationInterval = 200L,      // 10s
-                cleanupInterval = 2400L,        // 2min
-                initialCapacity = 16,
-                loadFactor = 0.75f,
-                concurrencyLevel = 4,
-                enablePlayerCache = true,
-                enableTeleportDataCache = true,
-                movementThreshold = 0.3
+                useExecutor = true, executorThreads = 3,
+                countdownInterval = 20L, expirationInterval = 200L, cleanupInterval = 2400L,
+                initialCapacity = 16, loadFactor = 0.75f, concurrencyLevel = 4,
+                enablePlayerCache = true, enableTeleportDataCache = true, movementThreshold = 0.3
             )
+
             PerformanceMode.HIGH_PERFORMANCE -> PerformanceSettings(
-                useExecutor = true,
-                executorThreads = 4,
-                countdownInterval = 5L,
-                expirationInterval = 100L,      // 5s
-                cleanupInterval = 1200L,        // 1min
-                initialCapacity = 32,
-                loadFactor = 0.75f,
-                concurrencyLevel = 8,
-                enablePlayerCache = true,
-                enableTeleportDataCache = true,
-                movementThreshold = 0.25
+                useExecutor = true, executorThreads = 4,
+                countdownInterval = 5L, expirationInterval = 100L, cleanupInterval = 1200L,
+                initialCapacity = 32, loadFactor = 0.75f, concurrencyLevel = 8,
+                enablePlayerCache = true, enableTeleportDataCache = true, movementThreshold = 0.25
             )
-            else -> getPerformanceSettings() // Fallback to detected mode
+            // AUTO is always resolved to a concrete tier before getPerformanceSettings() is called.
+            // This branch is a safety net — never reached in normal operation.
+            PerformanceMode.AUTO -> PerformanceSettings(
+                useExecutor = true, executorThreads = 3,
+                countdownInterval = 20L, expirationInterval = 200L, cleanupInterval = 2400L,
+                initialCapacity = 16, loadFactor = 0.75f, concurrencyLevel = 4,
+                enablePlayerCache = true, enableTeleportDataCache = true, movementThreshold = 0.3
+            )
         }
     }
 
+    /** Read by PlayerMoveListener on every event — volatile read, no lock. */
     fun getMovementThreshold(): Double = settings.movementThreshold
+
+    /**
+     * Save a player's current location as their /back destination.
+     * Called by PlayerMoveListener on death so /back returns to the death spot.
+     */
+    fun saveLastLocation(player: Player) {
+        lastLocations[player.uniqueId] = player.location.clone()
+    }
+
+    /**
+     * Send the "death location saved, use /back" notification after respawn.
+     * Only sent if the player actually has a saved death location.
+     */
+    fun sendDeathBackNotification(player: Player) {
+        if (lastLocations.containsKey(player.uniqueId)) {
+            sendMessage(player, messageManager.getBackDeathSaved())
+        }
+    }
+
+    // ─── Commands ─────────────────────────────────────────────────────────────
 
     override fun onCommand(sender: CommandSender, command: Command, label: String, args: Array<out String>): Boolean {
         if (sender !is Player) {
@@ -416,68 +386,86 @@ class YoTPA : JavaPlugin() {
         }
 
         return when (command.name.lowercase()) {
-            "tpa" -> { handleTpaCommand(sender, args); true }
-            "tpaccept" -> { handleTpAcceptCommand(sender); true }
-            "tpadeny" -> { handleTpDenyCommand(sender); true }
-            "tpahere" -> { handleTpaHereCommand(sender, args); true }
-            "tpareload" -> { handleReloadCommand(sender); true }
-            "tpastats" -> { handleStatsCommand(sender); true }
-            "tpainfo" -> { handleInfoCommand(sender); true }
+            "tpa" -> {
+                handleTpaCommand(sender, args); true
+            }
+
+            "tpaccept" -> {
+                handleTpAcceptCommand(sender); true
+            }
+
+            "tpadeny" -> {
+                handleTpDenyCommand(sender); true
+            }
+
+            "tpahere" -> {
+                handleTpaHereCommand(sender, args); true
+            }
+
+            "tpareload" -> {
+                handleReloadCommand(sender); true
+            }
+
+            "tpastats" -> {
+                handleStatsCommand(sender); true
+            }
+
+            "tpainfo" -> {
+                handleInfoCommand(sender); true
+            }
+
+            "back" -> {
+                handleBackCommand(sender); true
+            }
+
             else -> false
         }
     }
 
     private fun handleTpaCommand(player: Player, args: Array<out String>) {
         if (args.isEmpty()) {
-            sendMessage(player, messageManager.getTpaUsage())
-            return
+            sendMessage(player, messageManager.getTpaUsage()); return
         }
 
         val target = getPlayerByName(args[0])
         if (target == null) {
-            sendMessage(player, messageManager.getPlayerNotFound(args[0]))
-            return
+            sendMessage(player, messageManager.getPlayerNotFound(args[0])); return
         }
 
         if (!validateTeleportRequest(player, target)) return
 
         storeRequest(player, target, false)
         updateCooldown(player)
-
         sendMessage(player, messageManager.getTpaSent(target.name))
         sendMessage(target, messageManager.getTpaReceived(player.name))
-        playSound(target, requestSoundKey)
+        playSound(target, requestSound)
         bStats.incrementRequestSent()
     }
 
     private fun handleTpaHereCommand(player: Player, args: Array<out String>) {
         if (args.isEmpty()) {
-            sendMessage(player, messageManager.getTpaHereUsage())
-            return
+            sendMessage(player, messageManager.getTpaHereUsage()); return
         }
 
         val target = getPlayerByName(args[0])
         if (target == null) {
-            sendMessage(player, messageManager.getPlayerNotFound(args[0]))
-            return
+            sendMessage(player, messageManager.getPlayerNotFound(args[0])); return
         }
 
         if (!validateTeleportRequest(player, target)) return
 
         storeRequest(player, target, true)
         updateCooldown(player)
-
         sendMessage(player, messageManager.getTpaHereSent(target.name))
         sendMessage(target, messageManager.getTpaHereReceived(player.name))
-        playSound(target, requestSoundKey)
+        playSound(target, requestSound)
         bStats.incrementRequestSent()
     }
 
     private fun handleTpAcceptCommand(player: Player) {
         val request = tpaRequests.remove(player.uniqueId)
         if (request == null) {
-            sendMessage(player, messageManager.getTpAcceptNoRequest())
-            return
+            sendMessage(player, messageManager.getTpAcceptNoRequest()); return
         }
 
         val requester = Bukkit.getPlayer(request.requesterUUID)
@@ -486,11 +474,7 @@ class YoTPA : JavaPlugin() {
             return
         }
 
-        val (teleporter, destination) = if (request.isHereRequest) {
-            player to requester
-        } else {
-            requester to player
-        }
+        val (teleporter, destination) = if (request.isHereRequest) player to requester else requester to player
 
         sendMessage(player, messageManager.getTpAcceptAcceptedSender(requester.name))
         sendMessage(requester, messageManager.getTpAcceptAcceptedTarget(player.name))
@@ -501,8 +485,7 @@ class YoTPA : JavaPlugin() {
     private fun handleTpDenyCommand(player: Player) {
         val request = tpaRequests.remove(player.uniqueId)
         if (request == null) {
-            sendMessage(player, messageManager.getTpDenyNoRequest())
-            return
+            sendMessage(player, messageManager.getTpDenyNoRequest()); return
         }
 
         val requester = Bukkit.getPlayer(request.requesterUUID)
@@ -511,11 +494,62 @@ class YoTPA : JavaPlugin() {
         sendMessage(player, messageManager.getTpDenyDeniedSender(requesterName))
         requester?.let {
             sendMessage(it, messageManager.getTpDenyDeniedTarget(player.name))
-            playSound(it, cancelSoundKey)
+            playSound(it, cancelSound)
+        }
+        playSound(player, cancelSound)
+        bStats.incrementRequestDenied()
+    }
+
+    private fun handleBackCommand(player: Player) {
+        if (!player.hasPermission("yotpa.back")) {
+            sendMessage(player, messageManager.getNoPermission())
+            return
         }
 
-        playSound(player, cancelSoundKey)
-        bStats.incrementRequestDenied()
+        // Cooldown check — bypass permission skips this block entirely
+        if (backCooldown > 0 && !player.hasPermission("yotpa.bypass.back-cooldown")) {
+            val lastUse = backCooldowns[player.uniqueId]
+            if (lastUse != null) {
+                val elapsed = System.currentTimeMillis() - lastUse
+                val remaining = backCooldown * 1000L - elapsed
+                if (remaining > 0) {
+                    sendMessage(player, messageManager.getBackCooldown((remaining + 999) / 1000))
+                    return
+                }
+            }
+        }
+
+        val lastLocation = lastLocations[player.uniqueId]
+        if (lastLocation == null) {
+            sendMessage(player, messageManager.getBackNoLocation())
+            return
+        }
+
+        val currentLocation = player.location.clone()
+
+        if (isFolia) {
+            player.teleportAsync(lastLocation).thenAccept { success ->
+                if (success) {
+                    // Single-use: consume the saved location so a second /back says "no location"
+                    lastLocations.remove(player.uniqueId)
+                    if (backCooldown > 0) backCooldowns[player.uniqueId] = System.currentTimeMillis()
+                    // sendMessage + playSound must be on the player's region thread
+                    player.scheduler.run(this, { _ ->
+                        sendMessage(player, messageManager.getBackTeleporting())
+                        playSound(player, successSound)
+                    }, null)
+                }
+            }
+        } else {
+            // teleport() returns false if the world is unloaded or another plugin cancels it
+            if (player.teleport(lastLocation)) {
+                // Single-use: consume the saved location so a second /back says "no location"
+                lastLocations.remove(player.uniqueId)
+                if (backCooldown > 0) backCooldowns[player.uniqueId] = System.currentTimeMillis()
+                sendMessage(player, messageManager.getBackTeleporting())
+                playSound(player, successSound)
+            }
+        }
     }
 
     private fun handleReloadCommand(player: Player) {
@@ -524,8 +558,7 @@ class YoTPA : JavaPlugin() {
             return
         }
 
-        // Try to reload config first (catch YAML errors)
-        val reloadResult = runCatching {
+        val reloadOk = runCatching {
             reloadConfig()
             messageManager.reload()
             true
@@ -537,27 +570,21 @@ class YoTPA : JavaPlugin() {
             false
         }
 
-        if (!reloadResult) {
-            return // Stop if YAML is broken
-        }
+        if (!reloadOk) return
 
-        // Now validate the reloaded config
-        val validationResult = validateConfig()
+        val result = validateConfig()
 
-        if (validationResult.isValid) {
+        if (result.isValid) {
             loadConfig()
-
             val oldMode = detectedMode
             detectAndApplyPerformanceMode()
             cachedSettings = getPerformanceSettings()
 
             sendMessage(player, messageManager.getTpaReloadSuccess())
 
-            if (validationResult.warnings.isNotEmpty()) {
+            if (result.warnings.isNotEmpty()) {
                 sendMessage(player, messageManager.getTpaReloadWarningsHeader())
-                validationResult.warnings.forEach { warning ->
-                    player.sendMessage(messageManager.getTpaReloadWarningItem(warning))
-                }
+                result.warnings.forEach { player.sendMessage(messageManager.getTpaReloadWarningItem(it)) }
             }
 
             if (oldMode != detectedMode) {
@@ -566,122 +593,16 @@ class YoTPA : JavaPlugin() {
             }
         } else {
             sendMessage(player, messageManager.getTpaReloadValidationFailed())
-            validationResult.errors.forEach { error ->
-                player.sendMessage(messageManager.getTpaReloadErrorItem(error))
-            }
+            result.errors.forEach { player.sendMessage(messageManager.getTpaReloadErrorItem(it)) }
 
-            if (validationResult.warnings.isNotEmpty()) {
+            if (result.warnings.isNotEmpty()) {
                 sendMessage(player, messageManager.getTpaReloadWarningsHeader())
-                validationResult.warnings.forEach { warning ->
-                    player.sendMessage(messageManager.getTpaReloadWarningItem(warning))
-                }
+                result.warnings.forEach { player.sendMessage(messageManager.getTpaReloadWarningItem(it)) }
             }
 
             sendMessage(player, messageManager.getTpaReloadNotApplied())
             sendMessage(player, messageManager.getTpaReloadUsingPrevious())
         }
-    }
-
-    private data class ValidationResult(
-        val isValid: Boolean,
-        val errors: List<String>,
-        val warnings: List<String>
-    )
-
-    /**
-     * Validate a sound configuration entry
-     */
-    private fun validateSoundConfig(key: String, soundName: String, warnings: MutableList<String>) {
-        if (soundName.isEmpty()) {
-            warnings.add("Sound '$key' is not set, using default")
-        } else {
-            // Validate by trying to parse the sound
-            val testKey = runCatching {
-                if (soundName.contains(".")) {
-                    // New format: "block.note_block.pling"
-                    NamespacedKey.minecraft(soundName)
-                } else {
-                    // Old format: "BLOCK_NOTE_BLOCK_PLING" -> convert
-                    val converted = soundName.lowercase().replace("_", ".")
-                    NamespacedKey.minecraft(converted)
-                }
-            }.getOrNull()
-
-            if (testKey != null) {
-                val sound = Registry.SOUNDS.get(testKey)
-                if (sound == null) {
-                    warnings.add("Sound '$key' ($soundName) not found in registry, will use default")
-                }
-            } else {
-                warnings.add("Sound '$key' ($soundName) has invalid format")
-            }
-        }
-    }
-
-    private fun validateConfig(): ValidationResult {
-        val errors = mutableListOf<String>()
-        val warnings = mutableListOf<String>()
-
-        try {
-            // Validate timeout
-            val timeout = config.getInt("request-timeout", -1)
-            when {
-                timeout < 0 -> errors.add("request-timeout is missing or invalid")
-                timeout < 10 -> warnings.add("request-timeout ($timeout) is very low, recommended: 30-120")
-                timeout > 300 -> warnings.add("request-timeout ($timeout) is very high, recommended: 30-120")
-            }
-
-            // Validate cooldown
-            val cooldown = config.getInt("request-cooldown", -1)
-            when {
-                cooldown < 0 -> errors.add("request-cooldown is missing or invalid")
-                cooldown < 5 -> warnings.add("request-cooldown ($cooldown) is very low, recommended: 15-60")
-                cooldown > 180 -> warnings.add("request-cooldown ($cooldown) is very high, recommended: 15-60")
-            }
-
-            // Validate teleport delay
-            val delay = config.getInt("teleport-delay", -1)
-            when {
-                delay < 0 -> errors.add("teleport-delay is missing or invalid")
-                delay < 1 -> errors.add("teleport-delay must be at least 1 second")
-                delay > 30 -> warnings.add("teleport-delay ($delay) is very high, recommended: 3-10")
-            }
-
-            // Validate performance mode
-            val mode = config.getString("performance.mode", "") ?: ""
-            if (mode.isNotEmpty()) {
-                try {
-                    PerformanceMode.valueOf(mode.uppercase())
-                } catch (_: IllegalArgumentException) {
-                    errors.add("Invalid performance.mode: '$mode'. Valid: AUTO, ULTRA_LIGHT, LIGHT, BALANCED, HIGH_PERFORMANCE")
-                }
-            }
-
-            // Validate sounds
-            val soundKeys = listOf("countdown", "success", "cancel", "request")
-            soundKeys.forEach { key ->
-                val soundName = config.getString("sounds.$key", "") ?: ""
-                validateSoundConfig(key, soundName, warnings)
-            }
-
-            // Validate features
-            val features = listOf("statistics", "bstats", "titles", "sounds")
-            features.forEach { feature ->
-                if (!config.contains("features.$feature")) {
-                    warnings.add("Feature setting 'features.$feature' is missing, using default")
-                }
-            }
-
-        } catch (e: Exception) {
-            errors.add("Critical error reading config: ${e.message}")
-            logger.log(Level.SEVERE, "Error validating config", e)
-        }
-
-        return ValidationResult(
-            isValid = errors.isEmpty(),
-            errors = errors,
-            warnings = warnings
-        )
     }
 
     private fun handleStatsCommand(player: Player) {
@@ -695,21 +616,21 @@ class YoTPA : JavaPlugin() {
 
         player.sendMessage(messageManager.getTpaStatsHeader())
 
-        stats["All-Time"]?.let { allTimeStats ->
+        stats["All-Time"]?.let { s ->
             player.sendMessage(messageManager.getTpaStatsAllTime())
-            player.sendMessage(messageManager.getTpaStatsSent(allTimeStats["Sent"].toString()))
-            player.sendMessage(messageManager.getTpaStatsAccepted(allTimeStats["Accepted"].toString()))
-            player.sendMessage(messageManager.getTpaStatsDenied(allTimeStats["Denied"].toString()))
-            player.sendMessage(messageManager.getTpaStatsExpired(allTimeStats["Expired"].toString()))
+            player.sendMessage(messageManager.getTpaStatsSent(s["Sent"].toString()))
+            player.sendMessage(messageManager.getTpaStatsAccepted(s["Accepted"].toString()))
+            player.sendMessage(messageManager.getTpaStatsDenied(s["Denied"].toString()))
+            player.sendMessage(messageManager.getTpaStatsExpired(s["Expired"].toString()))
             player.sendMessage(messageManager.getTpaStatsAcceptanceRate(acceptanceRate.toString()))
         }
 
-        stats["Daily"]?.let { dailyStats ->
+        stats["Daily"]?.let { s ->
             player.sendMessage(messageManager.getTpaStatsDaily())
-            player.sendMessage(messageManager.getTpaStatsSent(dailyStats["Sent"].toString()))
-            player.sendMessage(messageManager.getTpaStatsAccepted(dailyStats["Accepted"].toString()))
-            player.sendMessage(messageManager.getTpaStatsDenied(dailyStats["Denied"].toString()))
-            player.sendMessage(messageManager.getTpaStatsExpired(dailyStats["Expired"].toString()))
+            player.sendMessage(messageManager.getTpaStatsSent(s["Sent"].toString()))
+            player.sendMessage(messageManager.getTpaStatsAccepted(s["Accepted"].toString()))
+            player.sendMessage(messageManager.getTpaStatsDenied(s["Denied"].toString()))
+            player.sendMessage(messageManager.getTpaStatsExpired(s["Expired"].toString()))
         }
     }
 
@@ -729,35 +650,34 @@ class YoTPA : JavaPlugin() {
         player.sendMessage(messageManager.getTpaInfoActiveTeleports(teleportData.size.toString()))
     }
 
+    // ─── Teleport lifecycle ───────────────────────────────────────────────────
+
     fun startTeleportCountdown(teleporter: Player, destination: Player) {
         cancelTeleport(teleporter.uniqueId)
 
-        // Store original location in PersistentDataContainer
-        val originalLocation = teleporter.location.clone()
-        storeOriginalLocation(teleporter, originalLocation)
+        storeCountdownOrigin(teleporter.uniqueId, teleporter.location.clone())
 
         val data = TeleportData(
-            destination = destination,
+            destinationUUID = destination.uniqueId,
             startTime = System.currentTimeMillis(),
             duration = teleportDelay * 1000,
             lastShownSecond = teleportDelay
         )
-
-        // Always store in teleportData — it's the source of truth for both Paper and Folia
         teleportData[teleporter.uniqueId] = data
 
-        // Show title
-        teleporter.showTitle(Title.title(
-            messageManager.getTeleportTitle(),
-            messageManager.getTeleportSubtitle(),
-            titleCache.titleTimes
-        ))
-
-        // Initial countdown message
+        if (titlesEnabled) {
+            teleporter.showTitle(
+                Title.title(
+                    messageManager.getTeleportTitle(),
+                    messageManager.getTeleportSubtitle(),
+                    titleTimes
+                )
+            )
+        }
         sendCountdownMessage(teleporter, teleportDelay)
 
-        // Folia: schedule a per-entity task (required for region threading)
-        // Paper: the single batch task (started in onEnable) drives all countdowns — no per-player task needed
+        // Folia: per-entity task required for region-thread ownership
+        // Paper: the single batch task in startPaperBatchTask() handles all countdowns
         if (isFolia) {
             teleporter.scheduler.runAtFixedRate(this, { _ ->
                 processCountdown(teleporter, data)
@@ -767,12 +687,14 @@ class YoTPA : JavaPlugin() {
     }
 
     private fun processCountdown(teleporter: Player, data: TeleportData) {
-        // Release the Player reference and abort if destination went offline — prevents holding
-        // a strong reference to an offline Player object for the rest of the countdown duration
-        if (!data.destination.isOnline) {
+        // Resolve Player fresh each tick — safe from any thread, avoids zombie references.
+        // Bukkit.getPlayer() returns null for offline players, making the isOnline check redundant
+        // and avoiding an entity-API call from a potentially foreign region thread on Folia.
+        val destination = Bukkit.getPlayer(data.destinationUUID)
+        if (destination == null) {
             cancelTeleport(teleporter.uniqueId)
             sendMessage(teleporter, messageManager.getTeleportCancelledDestinationOffline())
-            playSound(teleporter, cancelSoundKey)
+            playSound(teleporter, cancelSound)
             return
         }
 
@@ -780,15 +702,14 @@ class YoTPA : JavaPlugin() {
         val remaining = data.duration - elapsed
 
         if (remaining <= 0) {
-            performTeleport(teleporter, data.destination)
+            performTeleport(teleporter, destination)
             cancelTeleport(teleporter.uniqueId)
         } else {
             val remainingSeconds = ((remaining + 999) / 1000).toInt()
-
             if (remainingSeconds != data.lastShownSecond && remainingSeconds > 0) {
                 data.lastShownSecond = remainingSeconds
                 sendCountdownMessage(teleporter, remainingSeconds)
-                playSound(teleporter, countdownSoundKey)
+                playSound(teleporter, countdownSound)
             }
         }
     }
@@ -798,177 +719,184 @@ class YoTPA : JavaPlugin() {
     }
 
     fun cancelTeleport(uuid: UUID) {
-        // Folia: cancel the per-entity scheduled task; Paper: batch task skips removed entries automatically
+        // Folia: cancel the per-entity scheduled task
+        // Paper: batch task skips entries absent from teleportData automatically
         if (isFolia) {
             teleportTasks.remove(uuid)?.let { task -> runCatching { task.cancel() } }
         }
         teleportData.remove(uuid)
-
-        // Remove from PersistentDataContainer
-        Bukkit.getPlayer(uuid)?.let { player ->
-            removeOriginalLocation(player)
-        }
-    }
-
-    /**
-     * Called when a player disconnects. Cleans up any TPA requests they sent or received
-     * so stale Player references and map entries don't linger until the expiry timer fires.
-     */
-    fun cleanupPlayerOnQuit(player: Player) {
-        val uuid = player.uniqueId
-        // Remove request where this player is the target
-        tpaRequests.remove(uuid)
-        // Remove request where this player is the requester (requires a scan — bounded by online count)
-        tpaRequests.entries.removeIf { it.value.requesterUUID == uuid }
+        removeCountdownOrigin(uuid)
     }
 
     fun cancelTeleportDueToMovement(player: Player) {
         cancelTeleport(player.uniqueId)
         sendMessage(player, messageManager.getTeleportCancelledMovement())
-        playSound(player, cancelSoundKey)
-    }
-
-    private fun performTeleport(teleporter: Player, destination: Player) {
-        if (isFolia) {
-            // Capture destination location and name on the current thread before going async
-            val destLocation = destination.location
-            val destName = destination.name
-            teleporter.teleportAsync(destLocation).thenAccept { success ->
-                if (success) {
-                    sendMessage(teleporter, messageManager.getTeleportSuccess(destName))
-                    teleporter.scheduler.run(this, { _ -> playSound(teleporter, successSoundKey) }, null)
-                    destination.scheduler.run(this, { _ -> playSound(destination, successSoundKey) }, null)
-                }
-            }
-        } else {
-            teleporter.teleport(destination)
-            sendMessage(teleporter, messageManager.getTeleportSuccess(destination.name))
-            playSound(teleporter, successSoundKey)
-            playSound(destination, successSoundKey)
-        }
+        playSound(player, cancelSound)
     }
 
     /**
-     * Paper-only: one repeating task processes ALL active teleport countdowns each tick.
+     * Called when a player disconnects. Cleans up any TPA requests they sent or received
+     * so stale Player references and map entries don't linger until the expiry timer fires.
+     * Note: countdownOrigins is already cleaned by cancelTeleport() called from onPlayerQuit.
+     */
+    fun cleanupPlayerOnQuit(player: Player) {
+        val uuid = player.uniqueId
+        tpaRequests.remove(uuid)
+        tpaRequests.entries.removeIf { it.value.requesterUUID == uuid }
+        cooldowns.remove(uuid)
+        playerNameCache.remove(uuid)
+        lastLocations.remove(uuid)
+        backCooldowns.remove(uuid)
+    }
+
+    private fun performTeleport(teleporter: Player, destination: Player) {
+        // teleporter.location is safe here — always called on teleporter's own region thread
+        // (entity scheduler callback or Paper main thread).
+        lastLocations[teleporter.uniqueId] = teleporter.location.clone()
+
+        if (isFolia) {
+            // destination may be owned by a completely different Folia region.
+            // Reading destination.location from the teleporter's region thread is a thread violation.
+            // Fix: dispatch to destination's entity scheduler to snapshot the location there,
+            // then launch teleportAsync (which loads chunks and works from any thread).
+            val destName = destination.name   // Player name is immutable — safe from any thread
+            destination.scheduler.run(this, { _ ->
+                val destLocation = destination.location.clone()
+                teleporter.teleportAsync(destLocation).thenAccept { success ->
+                    if (success) {
+                        teleporter.scheduler.run(this, { _ ->
+                            sendMessage(teleporter, messageManager.getTeleportSuccess(destName))
+                            playSound(teleporter, successSound)
+                        }, null)
+                        destination.scheduler.run(this, { _ -> playSound(destination, successSound) }, null)
+                    }
+                }
+            }, null)
+        } else {
+            if (teleporter.teleport(destination)) {
+                sendMessage(teleporter, messageManager.getTeleportSuccess(destination.name))
+                playSound(teleporter, successSound)
+                playSound(destination, successSound)
+            }
+        }
+    }
+
+    // ─── Paper batch countdown task ───────────────────────────────────────────
+
+    /**
+     * One repeating task processes ALL active teleport countdowns each interval.
      * Replaces N per-player scheduled tasks with a single O(active-teleports) loop,
      * keeping scheduler overhead at O(1) regardless of concurrent player count.
+     *
+     * Period is driven by settings.countdownInterval rather than a hardcoded 1 tick:
+     * - ULTRA_LIGHT / LIGHT / BALANCED: 20 ticks (1 s)  — no missed second since countdown is time-based
+     * - HIGH_PERFORMANCE: 5 ticks (250 ms)               — tighter polling for better responsiveness
+     * Polling every 1 tick (50 ms) would waste ~95-98 % of main-thread work for no gain.
      */
     private fun startPaperBatchTask() {
+        val interval = settings.countdownInterval
         paperBatchTaskId = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
             if (teleportData.isEmpty()) return@scheduleSyncRepeatingTask
-            // Snapshot keys first to avoid ConcurrentModificationException while cancelTeleport mutates the map
-            val uuids = ArrayList(teleportData.keys)
-            for (uuid in uuids) {
-                val data = teleportData[uuid] ?: continue
+            // ConcurrentHashMap iteration is safe without a snapshot: the iterator uses weak-consistency
+            // semantics and will not throw CME even when cancelTeleport() removes entries mid-loop.
+            val iter = teleportData.entries.iterator()
+            while (iter.hasNext()) {
+                val (uuid, data) = iter.next()
                 val teleporter = Bukkit.getPlayer(uuid)
                 if (teleporter == null || !teleporter.isOnline) {
-                    cancelTeleport(uuid)
+                    iter.remove()
+                    removeCountdownOrigin(uuid)
                     continue
                 }
                 processCountdown(teleporter, data)
             }
-        }, 1L, 1L)
+        }, 1L, interval)
     }
 
+    // ─── Maintenance tasks ────────────────────────────────────────────────────
+
     private fun startMaintenanceTasks() {
-        val settings = this.settings
+        val s = settings
 
         if (executor != null) {
-            // Use executor for async tasks
             executor!!.scheduleAtFixedRate({
                 runCatching { checkExpiredRequests() }
                     .onFailure { e -> logger.log(Level.WARNING, "Error during expiration check", e) }
-            }, settings.expirationInterval, settings.expirationInterval, TimeUnit.MILLISECONDS)
+            }, s.expirationInterval, s.expirationInterval, TimeUnit.MILLISECONDS)
 
             executor!!.scheduleAtFixedRate({
                 runCatching { cleanupCaches() }
                     .onFailure { e -> logger.log(Level.WARNING, "Error during cache cleanup", e) }
-            }, settings.cleanupInterval, settings.cleanupInterval, TimeUnit.MILLISECONDS)
+            }, s.cleanupInterval, s.cleanupInterval, TimeUnit.MILLISECONDS)
         } else {
-            // Use scheduler for sync tasks (ultra-light mode)
-            val expirationTicks = settings.expirationInterval / 50
-            val cleanupTicks = settings.cleanupInterval / 50
+            // ULTRA_LIGHT: no executor, use scheduler
+            val expirationTicks = s.expirationInterval / 50
+            val cleanupTicks = s.cleanupInterval / 50
             if (isFolia) {
-                server.globalRegionScheduler.runAtFixedRate(this, { _ ->
-                    checkExpiredRequests()
-                }, expirationTicks, expirationTicks)
-                server.globalRegionScheduler.runAtFixedRate(this, { _ ->
-                    cleanupCaches()
-                }, cleanupTicks, cleanupTicks)
+                server.globalRegionScheduler.runAtFixedRate(
+                    this,
+                    { _ -> checkExpiredRequests() },
+                    expirationTicks,
+                    expirationTicks
+                )
+                server.globalRegionScheduler.runAtFixedRate(this, { _ -> cleanupCaches() }, cleanupTicks, cleanupTicks)
             } else {
-                Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
-                    checkExpiredRequests()
-                }, expirationTicks, expirationTicks)
-                Bukkit.getScheduler().scheduleSyncRepeatingTask(this, {
-                    cleanupCaches()
-                }, cleanupTicks, cleanupTicks)
+                Bukkit.getScheduler()
+                    .scheduleSyncRepeatingTask(this, { checkExpiredRequests() }, expirationTicks, expirationTicks)
+                Bukkit.getScheduler().scheduleSyncRepeatingTask(this, { cleanupCaches() }, cleanupTicks, cleanupTicks)
             }
         }
     }
 
     private fun checkExpiredRequests() {
         val currentTime = System.currentTimeMillis()
-        val expiredRequests = mutableListOf<UUID>()
+        val timeoutMillis = requestTimeout * 1000L
+        val expiredTargets = mutableListOf<UUID>()
 
+        // bypassTimeout is captured at request creation (main thread) — no Bukkit API call needed here,
+        // making this loop safe to run from an executor thread or Folia global-region thread.
         tpaRequests.forEach { (targetUuid, request) ->
-            if (currentTime - request.timestamp > requestTimeout * 1000L) {
-                val requester = Bukkit.getPlayer(request.requesterUUID)
-                if (requester?.hasPermission("yotpa.bypass.timeout") != true) {
-                    expiredRequests.add(targetUuid)
-                }
+            if (!request.bypassTimeout && currentTime - request.timestamp > timeoutMillis) {
+                expiredTargets.add(targetUuid)
             }
         }
 
-        if (expiredRequests.isNotEmpty()) {
-            if (isFolia) {
-                server.globalRegionScheduler.run(this) { _ ->
-                    processExpiredRequests(expiredRequests)
-                }
-            } else {
-                Bukkit.getScheduler().runTask(this, Runnable {
-                    processExpiredRequests(expiredRequests)
-                })
-            }
-        }
+        if (expiredTargets.isEmpty()) return
+
+        val dispatch: () -> Unit = { processExpiredRequests(expiredTargets) }
+        if (isFolia) server.globalRegionScheduler.run(this) { _ -> dispatch() }
+        else Bukkit.getScheduler().runTask(this, dispatch)
     }
 
-    private fun processExpiredRequests(expiredRequests: List<UUID>) {
-        expiredRequests.forEach { targetUuid ->
+    private fun processExpiredRequests(expired: List<UUID>) {
+        expired.forEach { targetUuid ->
             tpaRequests.remove(targetUuid)?.let { request ->
                 Bukkit.getPlayer(targetUuid)?.let { target ->
                     sendMessage(target, messageManager.getTeleportExpiredReceiver(getPlayerName(request.requesterUUID)))
                 }
-
                 Bukkit.getPlayer(request.requesterUUID)?.let { requester ->
                     sendMessage(requester, messageManager.getTeleportExpiredSender(getPlayerName(targetUuid)))
                 }
-
                 bStats.incrementRequestExpired()
             }
         }
     }
 
     private fun cleanupCaches() {
-        if (settings.enablePlayerCache) {
-            val iterator = playerNameCache.entries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (Bukkit.getPlayer(entry.key) == null) {
-                    iterator.remove()
-                }
-            }
-        }
-
-        // Cleanup expired cooldowns
+        // playerNameCache: entries are removed individually in cleanupPlayerOnQuit on every disconnect.
+        // Calling Bukkit.getPlayer() here from an executor/global-region thread is not thread-safe,
+        // so this scan is intentionally omitted — the cache is already self-cleaning.
         val currentTime = System.currentTimeMillis()
         val cooldownExpiry = requestCooldown * 1000L
-        cooldowns.entries.removeIf { entry ->
-            currentTime - entry.value > cooldownExpiry
-        }
+        cooldowns.entries.removeIf { currentTime - it.value > cooldownExpiry }
+        val backExpiry = backCooldown * 1000L
+        backCooldowns.entries.removeIf { currentTime - it.value > backExpiry }
     }
 
+    // ─── Internal helpers ─────────────────────────────────────────────────────
+
     private fun registerCommands() {
-        arrayOf("tpa", "tpaccept", "tpadeny", "tpahere", "tpareload", "tpastats", "tpainfo").forEach { cmd ->
+        arrayOf("tpa", "tpaccept", "tpadeny", "tpahere", "tpareload", "tpastats", "tpainfo", "back").forEach { cmd ->
             getCommand(cmd)?.setExecutor(this)
         }
     }
@@ -979,6 +907,9 @@ class YoTPA : JavaPlugin() {
         tpaRequests.clear()
         cooldowns.clear()
         playerNameCache.clear()
+        countdownOrigins.clear()
+        lastLocations.clear()
+        backCooldowns.clear()
     }
 
     private fun validateTeleportRequest(requester: Player, target: Player): Boolean {
@@ -987,25 +918,26 @@ class YoTPA : JavaPlugin() {
             return false
         }
 
-        if (isOnCooldown(requester) && !requester.hasPermission("yotpa.bypass.cooldown")) {
-            val remainingCooldown = ((cooldowns[requester.uniqueId]!! + (requestCooldown * 1000L)) - System.currentTimeMillis()) / 1000
-            sendMessage(requester, messageManager.getCooldown(remainingCooldown))
+        if (!requester.hasPermission("yotpa.bypass.cooldown") && isOnCooldown(requester)) {
+            // Guard against TOCTOU: cleanupCaches() may concurrently remove the entry between
+            // isOnCooldown() and the read below, yielding lastCooldown = 0 and a huge negative remaining.
+            val lastCooldown = cooldowns[requester.uniqueId] ?: 0L
+            val remaining = ((lastCooldown + requestCooldown * 1000L) - System.currentTimeMillis()) / 1000
+            if (remaining > 0) sendMessage(requester, messageManager.getCooldown(remaining))
             return false
         }
 
         return true
     }
 
-    private fun getPlayerByName(name: String): Player? {
-        return Bukkit.getPlayer(name) ?:
-        Bukkit.getOnlinePlayers().find { it.name.equals(name, ignoreCase = true) }
-    }
+    private fun getPlayerByName(name: String): Player? =
+        Bukkit.getPlayer(name) ?: Bukkit.getOnlinePlayers().find { it.name.equals(name, ignoreCase = true) }
 
     private fun getPlayerName(uuid: UUID): String {
         return if (settings.enablePlayerCache) {
-            playerNameCache.getOrPut(uuid) {
-                Bukkit.getPlayer(uuid)?.name ?: "Unknown"
-            }
+            // computeIfAbsent is atomic — the mapping function runs at most once per key
+            // even under concurrent access, unlike Kotlin's getOrPut extension.
+            playerNameCache.computeIfAbsent(uuid) { Bukkit.getPlayer(uuid)?.name ?: "Unknown" }
         } else {
             Bukkit.getPlayer(uuid)?.name ?: "Unknown"
         }
@@ -1013,10 +945,11 @@ class YoTPA : JavaPlugin() {
 
     private fun storeRequest(requester: Player, target: Player, isHereRequest: Boolean) {
         tpaRequests[target.uniqueId] = TpaRequest(
-            requester.uniqueId,
-            target.uniqueId,
-            System.currentTimeMillis(),
-            isHereRequest
+            requesterUUID = requester.uniqueId,
+            targetUUID = target.uniqueId,
+            timestamp = System.currentTimeMillis(),
+            isHereRequest = isHereRequest,
+            bypassTimeout = requester.hasPermission("yotpa.bypass.timeout")
         )
     }
 
@@ -1031,11 +964,16 @@ class YoTPA : JavaPlugin() {
         return System.currentTimeMillis() - lastRequest < requestCooldown * 1000L
     }
 
+    // ─── Config loading ───────────────────────────────────────────────────────
+
+    // Parses values from the already-loaded config object — call reloadConfig() explicitly before this.
     private fun loadConfig() {
-        reloadConfig()
         requestTimeout = config.getInt("request-timeout", 60)
         requestCooldown = config.getInt("request-cooldown", 30)
         teleportDelay = config.getInt("teleport-delay", 5)
+        backCooldown = config.getInt("back-cooldown", 30)
+        soundsEnabled = config.getBoolean("features.sounds", true)
+        titlesEnabled = config.getBoolean("features.titles", true)
         loadSounds()
     }
 
@@ -1061,32 +999,27 @@ class YoTPA : JavaPlugin() {
             logger.log(Level.WARNING, "Error loading sounds from config, using defaults", e)
             setDefaultSounds()
         }
+
+        // Resolve and cache Sound objects once per config load.
+        // playSound() receives Sound? directly — zero registry lookups at runtime.
+        countdownSound = Registry.SOUNDS.get(countdownSoundKey)
+        successSound = Registry.SOUNDS.get(successSoundKey)
+        cancelSound = Registry.SOUNDS.get(cancelSoundKey)
+        requestSound = Registry.SOUNDS.get(requestSoundKey)
     }
 
     private fun parseSoundKey(soundName: String, default: NamespacedKey): NamespacedKey {
         return runCatching {
-            // Support both formats:
-            // 1. New format: "block.note_block.pling" (recommended)
-            // 2. Old format: "BLOCK_NOTE_BLOCK_PLING" (auto-convert)
             val key = if (soundName.contains(".")) {
                 NamespacedKey.minecraft(soundName)
             } else {
-                // Convert underscores to dots and lowercase
-                val converted = soundName.lowercase().replace("_", ".")
-                NamespacedKey.minecraft(converted)
+                NamespacedKey.minecraft(soundName.lowercase().replace("_", "."))
             }
-
-            // Validate that sound exists in registry
-            if (Registry.SOUNDS.get(key) != null) {
-                key
-            } else {
-                logger.fine("Sound '$soundName' not found in registry, using default")
-                default
+            if (Registry.SOUNDS.get(key) != null) key
+            else {
+                logger.fine("Sound '$soundName' not found in registry, using default"); default
             }
-        }.getOrElse { _ ->
-            logger.fine("Invalid sound name: $soundName, using default")
-            default
-        }
+        }.getOrElse { logger.fine("Invalid sound name: $soundName, using default"); default }
     }
 
     private fun setDefaultSounds() {
@@ -1096,33 +1029,103 @@ class YoTPA : JavaPlugin() {
         requestSoundKey = NamespacedKey.minecraft("entity.experience_orb.pickup")
     }
 
-    private fun sendMessage(sender: CommandSender, message: Component) {
-        sender.sendMessage(message)
-    }
+    // ─── Sound & messaging ────────────────────────────────────────────────────
 
-    private fun playSound(player: Player, soundKey: NamespacedKey) {
+    private fun sendMessage(sender: CommandSender, message: Component) = sender.sendMessage(message)
+
+    /** Null-safe: sound is null when not found in registry or sounds are disabled — silently skipped. */
+    private fun playSound(player: Player, sound: Sound?) {
+        if (!soundsEnabled) return
+        sound ?: return
         runCatching {
-            // Get sound from registry using the key
-            val sound = Registry.SOUNDS.get(soundKey)
-            if (sound != null) {
-                player.playSound(player.location, sound, 1.0f, 1.0f)
-            }
+            player.playSound(player.location, sound, 1.0f, 1.0f)
         }.onFailure { e ->
-            logger.log(Level.WARNING, "Failed to play sound: ${soundKey.asString()}", e)
+            logger.log(Level.WARNING, "Failed to play sound", e)
         }
     }
 
-    // Utility methods for system info
+    // ─── Config validation ────────────────────────────────────────────────────
+
+    private data class ValidationResult(val isValid: Boolean, val errors: List<String>, val warnings: List<String>)
+
+    private fun validateSoundConfig(key: String, soundName: String, warnings: MutableList<String>) {
+        if (soundName.isEmpty()) {
+            warnings.add("Sound '$key' is not set, using default"); return
+        }
+        val testKey = runCatching {
+            if (soundName.contains(".")) NamespacedKey.minecraft(soundName)
+            else NamespacedKey.minecraft(soundName.lowercase().replace("_", "."))
+        }.getOrNull()
+
+        when {
+            testKey == null -> warnings.add("Sound '$key' ($soundName) has invalid format")
+            Registry.SOUNDS.get(testKey) == null -> warnings.add("Sound '$key' ($soundName) not found in registry, will use default")
+        }
+    }
+
+    private fun validateConfig(): ValidationResult {
+        val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
+
+        try {
+            val timeout = config.getInt("request-timeout", -1)
+            when {
+                timeout < 0 -> errors.add("request-timeout is missing or invalid")
+                timeout < 10 -> warnings.add("request-timeout ($timeout) is very low, recommended: 30-120")
+                timeout > 300 -> warnings.add("request-timeout ($timeout) is very high, recommended: 30-120")
+            }
+
+            val cooldown = config.getInt("request-cooldown", -1)
+            when {
+                cooldown < 0 -> errors.add("request-cooldown is missing or invalid")
+                cooldown < 5 -> warnings.add("request-cooldown ($cooldown) is very low, recommended: 15-60")
+                cooldown > 180 -> warnings.add("request-cooldown ($cooldown) is very high, recommended: 15-60")
+            }
+
+            val delay = config.getInt("teleport-delay", -1)
+            when {
+                delay < 0 -> errors.add("teleport-delay is missing or invalid")
+                delay < 1 -> errors.add("teleport-delay must be at least 1 second")
+                delay > 30 -> warnings.add("teleport-delay ($delay) is very high, recommended: 3-10")
+            }
+
+            val backCd = config.getInt("back-cooldown", -1)
+            when {
+                backCd < 0 -> errors.add("back-cooldown is missing or invalid (use 0 to disable)")
+                backCd > 300 -> warnings.add("back-cooldown ($backCd) is very high, recommended: 0-60")
+            }
+
+            val mode = config.getString("performance.mode", "") ?: ""
+            if (mode.isNotEmpty()) {
+                runCatching { PerformanceMode.valueOf(mode.uppercase()) }
+                    .onFailure { errors.add("Invalid performance.mode: '$mode'. Valid: AUTO, ULTRA_LIGHT, LIGHT, BALANCED, HIGH_PERFORMANCE") }
+            }
+
+            listOf("countdown", "success", "cancel", "request").forEach { key ->
+                validateSoundConfig(key, config.getString("sounds.$key", "") ?: "", warnings)
+            }
+
+            listOf("statistics", "bstats", "titles", "sounds").forEach { feature ->
+                if (!config.contains("features.$feature")) warnings.add("Feature setting 'features.$feature' is missing, using default")
+            }
+        } catch (e: Exception) {
+            errors.add("Critical error reading config: ${e.message}")
+            logger.log(Level.SEVERE, "Error validating config", e)
+        }
+
+        return ValidationResult(errors.isEmpty(), errors, warnings)
+    }
+
+    // ─── Utility ─────────────────────────────────────────────────────────────
+
     private fun getMaxMemoryMB(): Long = Runtime.getRuntime().maxMemory() / 1024 / 1024
     private fun getAvailableMemoryMB(): Long = Runtime.getRuntime().freeMemory() / 1024 / 1024
 
-    private fun getOptimizationLevel(): String {
-        return when (detectedMode) {
-            PerformanceMode.ULTRA_LIGHT -> "Maximum (For 512 MB RAM)"
-            PerformanceMode.LIGHT -> "High (For 1-2 GB RAM)"
-            PerformanceMode.BALANCED -> "Moderate (For 2-4 GB RAM)"
-            PerformanceMode.HIGH_PERFORMANCE -> "Minimal (For 4+ GB RAM)"
-            else -> "Auto"
-        }
+    private fun getOptimizationLevel(): String = when (detectedMode) {
+        PerformanceMode.ULTRA_LIGHT -> "Maximum (For 512 MB RAM)"
+        PerformanceMode.LIGHT -> "High (For 1-2 GB RAM)"
+        PerformanceMode.BALANCED -> "Moderate (For 2-4 GB RAM)"
+        PerformanceMode.HIGH_PERFORMANCE -> "Minimal (For 4+ GB RAM)"
+        else -> "Auto"
     }
 }

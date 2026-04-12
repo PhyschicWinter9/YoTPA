@@ -1,7 +1,7 @@
 /**
  * admin.js — Admin bot helper
  *
- * TestBot_AdminLnwza must be OP on the server.
+ * TestBot_Adminz must be OP on the server.
  * Provides commands to teleport bots to specific positions/worlds
  * so that distance and cross-world TPA scenarios can be tested.
  *

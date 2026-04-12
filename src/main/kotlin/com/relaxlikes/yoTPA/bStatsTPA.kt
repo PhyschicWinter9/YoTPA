@@ -67,7 +67,7 @@ class BStatsTPA(private val plugin: YoTPA) {
 
         // Title display enabled/disabled
         metrics.addCustomChart(SimplePie("titles_enabled") {
-            if (plugin.config.getBoolean("titles.enabled", true)) "Enabled" else "Disabled"
+            if (plugin.config.getBoolean("features.titles", true)) "Enabled" else "Disabled"
         })
 
         // Request timeout setting

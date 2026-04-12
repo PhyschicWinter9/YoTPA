@@ -204,6 +204,15 @@ class MessageManager(private val plugin: JavaPlugin) {
     fun getTeleportExpiredSender(target: String) = getMessageWithPrefix("teleport.expired.sender", mapOf("target" to target))
     fun getTeleportExpiredReceiver(requester: String) = getMessageWithPrefix("teleport.expired.receiver", mapOf("requester" to requester))
 
+    // Back Command Messages
+    fun getBackNoLocation() = getMessageWithPrefix("commands.back.no-location")
+    fun getBackTeleporting() = getMessageWithPrefix("commands.back.teleporting")
+    fun getBackDeathSaved() = getMessageWithPrefix("commands.back.death-saved")
+    fun getBackCooldown(cooldown: Long): Component {
+        val plural = if (cooldown != 1L) "s" else ""
+        return getMessageWithPrefix("commands.back.cooldown", mapOf("cooldown" to cooldown.toString(), "plural" to plural))
+    }
+
     // Error Messages
     fun getPlayerNotFound(player: String) = getMessageWithPrefix("errors.player-not-found", mapOf("player" to player))
     fun getPlayerOnly() = getMessageWithPrefix("errors.player-only")

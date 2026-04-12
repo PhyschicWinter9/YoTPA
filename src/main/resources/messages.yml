@@ -90,6 +90,13 @@ commands:
     expired: "<gray>• Expired: <white>{expired}</white></gray>"
     acceptance-rate: "<gold>• Acceptance Rate: <white>{rate}%</white></gold>"
 
+  # /back command
+  back:
+    no-location: "<red>You don't have a previous location to return to.</red>"
+    teleporting: "<green>Teleporting back to your previous location.</green>"
+    death-saved: "<gray>Death location saved. Use <yellow>/back</yellow><gray> to return.</gray>"
+    cooldown: "<red>You must wait <yellow>{cooldown}</yellow><red> more second{plural} before using /back again.</red>"
+
   # /tpainfo command
   tpainfo:
     no-permission: "<red>You don't have permission to view system info.</red>"

@@ -3,3 +3,11 @@
 build/
 
 .idea/
+
+skills-lock.json
+
+RELEASE_NOTES.md
+
+.agents/skills/
+
+bot-test/config.js

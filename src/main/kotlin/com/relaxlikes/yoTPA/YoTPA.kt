@@ -1,6 +1,6 @@
 package com.relaxlikes.yoTPA
 
-import io.papermc.paper.threadedregions.scheduler.ScheduledTask
+import net.kyori.adventure.platform.bukkit.BukkitAudiences
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.title.Title
 import org.bukkit.Bukkit
@@ -32,7 +32,9 @@ class YoTPA : JavaPlugin() {
         }
     }
 
-    val pluginVersion: String get() = pluginMeta.version
+    @Suppress("DEPRECATION") // compile-only: description.version only runs on Spigot where it is not deprecated
+    val pluginVersion: String get() = runCatching { pluginMeta.version }.getOrElse { description.version }
+
 
     // ─── Performance mode ─────────────────────────────────────────────────────
 
@@ -52,7 +54,7 @@ class YoTPA : JavaPlugin() {
 
     private lateinit var tpaRequests: ConcurrentHashMap<UUID, TpaRequest>
     private lateinit var cooldowns: ConcurrentHashMap<UUID, Long>
-    private lateinit var teleportTasks: ConcurrentHashMap<UUID, ScheduledTask>
+    private lateinit var teleportTasks: ConcurrentHashMap<UUID, Any>
     private lateinit var teleportData: ConcurrentHashMap<UUID, TeleportData>
     private lateinit var playerNameCache: ConcurrentHashMap<UUID, String>
 
@@ -129,6 +131,7 @@ class YoTPA : JavaPlugin() {
     // Monotonic counter for worker thread names — avoids the racy Thread.activeCount()
     private val workerThreadCounter = AtomicInteger(0)
 
+    private lateinit var audiences: BukkitAudiences
     private lateinit var bStats: BStatsTPA
     private lateinit var messageManager: MessageManager
     private lateinit var updateChecker: UpdateChecker
@@ -182,13 +185,15 @@ class YoTPA : JavaPlugin() {
         initializeDataStructures()
         initializeExecutor()
 
+        audiences = BukkitAudiences.create(this)
+
         messageManager = MessageManager(this)
         messageManager.initialize()
 
         bStats = BStatsTPA(this)
         bStats.initialize()
 
-        updateChecker = UpdateChecker(this, pluginVersion, "PhyschicWinter9/YoTPA")
+        updateChecker = UpdateChecker(this, pluginVersion, "PhyschicWinter9/YoTPA", audiences)
         updateChecker.check()
 
         registerCommands()
@@ -213,7 +218,7 @@ class YoTPA : JavaPlugin() {
 
     override fun onDisable() {
         if (isFolia) {
-            teleportTasks.values.forEach { task -> runCatching { task.cancel() } }
+            teleportTasks.values.forEach { task -> runCatching { task.javaClass.getMethod("cancel").invoke(task) } }
         } else if (paperBatchTaskId != -1) {
             runCatching { Bukkit.getScheduler().cancelTask(paperBatchTaskId) }
         }
@@ -235,6 +240,7 @@ class YoTPA : JavaPlugin() {
 
         bStats.shutdown()
         updateChecker.shutdown()
+        audiences.close()
         clearAllData()
 
         logger.info("YoTPA plugin has been disabled!")
@@ -374,6 +380,50 @@ class YoTPA : JavaPlugin() {
     fun sendDeathBackNotification(player: Player) {
         if (lastLocations.containsKey(player.uniqueId)) {
             sendMessage(player, messageManager.getBackDeathSaved())
+        }
+    }
+
+    // ─── Scheduler helpers (Folia-safe) ──────────────────────────────────────
+    // All Folia lambda references (Consumer<ScheduledTask>) live here in YoTPA,
+    // which is never processed by the event-registration ASM.  Listener classes
+    // call these helpers with plain Runnable / (Player)->Unit lambdas so that
+    // ScheduledTask never appears in their synthetic method descriptors.
+
+    fun runDelayedForPlayer(player: Player, action: Runnable, delayTicks: Long) {
+        if (isFolia) {
+            player.scheduler.runDelayed(this, { _ -> action.run() }, null, delayTicks)
+        } else {
+            server.scheduler.runTaskLater(this, action, delayTicks)
+        }
+    }
+
+    fun scheduleRepeatingAsync(action: Runnable, initialDelay: Long, period: Long, unit: TimeUnit): Pair<Any?, Int> {
+        return if (isFolia) {
+            val task = server.asyncScheduler.runAtFixedRate(this, { _ -> action.run() }, initialDelay, period, unit)
+            Pair(task, -1)
+        } else {
+            val ticks = unit.toSeconds(period) * 20
+            val id = server.scheduler.runTaskTimerAsynchronously(this, action, ticks, ticks).taskId
+            Pair(null, id)
+        }
+    }
+
+    fun runForOnlineOps(action: (Player) -> Unit) {
+        val execute = Runnable {
+            server.onlinePlayers
+                .filter { it.hasPermission("yotpa.admin") || it.isOp }
+                .forEach { player ->
+                    if (isFolia) {
+                        player.scheduler.run(this, { _ -> action(player) }, null)
+                    } else {
+                        action(player)
+                    }
+                }
+        }
+        if (isFolia) {
+            server.globalRegionScheduler.run(this) { _ -> execute.run() }
+        } else {
+            server.scheduler.runTask(this, execute)
         }
     }
 
@@ -666,7 +716,7 @@ class YoTPA : JavaPlugin() {
         teleportData[teleporter.uniqueId] = data
 
         if (titlesEnabled) {
-            teleporter.showTitle(
+            audiences.player(teleporter).showTitle(
                 Title.title(
                     messageManager.getTeleportTitle(),
                     messageManager.getTeleportSubtitle(),
@@ -722,7 +772,7 @@ class YoTPA : JavaPlugin() {
         // Folia: cancel the per-entity scheduled task
         // Paper: batch task skips entries absent from teleportData automatically
         if (isFolia) {
-            teleportTasks.remove(uuid)?.let { task -> runCatching { task.cancel() } }
+            teleportTasks.remove(uuid)?.let { task -> runCatching { task.javaClass.getMethod("cancel").invoke(task) } }
         }
         teleportData.remove(uuid)
         removeCountdownOrigin(uuid)
@@ -1031,7 +1081,8 @@ class YoTPA : JavaPlugin() {
 
     // ─── Sound & messaging ────────────────────────────────────────────────────
 
-    private fun sendMessage(sender: CommandSender, message: Component) = sender.sendMessage(message)
+    private fun sendMessage(sender: CommandSender, message: Component) =
+        audiences.sender(sender).sendMessage(message)
 
     /** Null-safe: sound is null when not found in registry or sounds are disabled — silently skipped. */
     private fun playSound(player: Player, sound: Sound?) {

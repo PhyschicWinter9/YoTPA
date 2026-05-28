@@ -1,12 +1,11 @@
 package com.relaxlikes.yoTPA
 
-import io.papermc.paper.threadedregions.scheduler.ScheduledTask
+import net.kyori.adventure.platform.bukkit.BukkitAudiences
 import net.kyori.adventure.text.minimessage.MiniMessage
 import org.bukkit.entity.Player
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
 import org.bukkit.event.player.PlayerJoinEvent
-import org.bukkit.plugin.java.JavaPlugin
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
@@ -22,9 +21,10 @@ import java.util.logging.Level
  *   is discovered — completely silent if nothing changed
  */
 class UpdateChecker(
-    private val plugin: JavaPlugin,
+    private val plugin: YoTPA,
     private val currentVersion: String,
-    private val githubRepo: String
+    private val githubRepo: String,
+    private val audiences: BukkitAudiences
 ) : Listener {
 
     @Volatile var latestVersion: String? = null
@@ -39,12 +39,11 @@ class UpdateChecker(
     private val miniMessage = MiniMessage.miniMessage()
     private val apiUrl = "https://api.github.com/repos/$githubRepo/releases/latest"
 
-    private var periodicFoliaTask: ScheduledTask? = null
+    private var periodicFoliaTask: Any? = null
     private var periodicTaskId: Int = -1
 
     companion object {
         private const val CHECK_INTERVAL_HOURS = 24L
-        private val CHECK_INTERVAL_TICKS = CHECK_INTERVAL_HOURS * 60 * 60 * 20
     }
 
     /** Run the startup check and schedule the daily re-check. */
@@ -55,7 +54,7 @@ class UpdateChecker(
 
     /** Cancel the daily task — call from onDisable(). */
     fun shutdown() {
-        periodicFoliaTask?.cancel()
+        runCatching { periodicFoliaTask?.javaClass?.getMethod("cancel")?.invoke(periodicFoliaTask) }
         if (periodicTaskId != -1) {
             runCatching { plugin.server.scheduler.cancelTask(periodicTaskId) }
         }
@@ -64,19 +63,12 @@ class UpdateChecker(
     // ─── Scheduling ───────────────────────────────────────────────────────────
 
     private fun scheduleDailyCheck() {
-        if (YoTPA.isFolia) {
-            periodicFoliaTask = plugin.server.asyncScheduler.runAtFixedRate(
-                plugin,
-                { _ -> runCheck(isStartup = false) },
-                CHECK_INTERVAL_HOURS, CHECK_INTERVAL_HOURS, TimeUnit.HOURS
-            )
-        } else {
-            periodicTaskId = plugin.server.scheduler.runTaskTimerAsynchronously(
-                plugin,
-                Runnable { runCheck(isStartup = false) },
-                CHECK_INTERVAL_TICKS, CHECK_INTERVAL_TICKS
-            ).taskId
-        }
+        val (foliaTask, paperId) = plugin.scheduleRepeatingAsync(
+            Runnable { runCheck(isStartup = false) },
+            CHECK_INTERVAL_HOURS, CHECK_INTERVAL_HOURS, TimeUnit.HOURS
+        )
+        periodicFoliaTask = foliaTask
+        periodicTaskId = paperId
     }
 
     // ─── HTTP check ───────────────────────────────────────────────────────────
@@ -136,21 +128,7 @@ class UpdateChecker(
 
     /** Notify all currently online OPs/admins immediately when a new version is detected. */
     private fun notifyOnlineOps(latest: String) {
-        if (YoTPA.isFolia) {
-            plugin.server.globalRegionScheduler.run(plugin) { _ ->
-                plugin.server.onlinePlayers
-                    .filter { it.hasPermission("yotpa.admin") || it.isOp }
-                    .forEach { player ->
-                        player.scheduler.run(plugin, { _ -> notifyPlayer(player, latest) }, null)
-                    }
-            }
-        } else {
-            plugin.server.scheduler.runTask(plugin, Runnable {
-                plugin.server.onlinePlayers
-                    .filter { it.hasPermission("yotpa.admin") || it.isOp }
-                    .forEach { notifyPlayer(it, latest) }
-            })
-        }
+        plugin.runForOnlineOps { player -> notifyPlayer(player, latest) }
     }
 
     /** Notify a joining OP/admin if an update is already known. */
@@ -161,13 +139,7 @@ class UpdateChecker(
         if (!updateAvailable) return
 
         val latest = latestVersion ?: return
-        if (YoTPA.isFolia) {
-            player.scheduler.runDelayed(plugin, { _ -> notifyPlayer(player, latest) }, null, 40L)
-        } else {
-            plugin.server.scheduler.runTaskLater(plugin, Runnable {
-                notifyPlayer(player, latest)
-            }, 40L)
-        }
+        plugin.runDelayedForPlayer(player, Runnable { notifyPlayer(player, latest) }, 40L)
     }
 
     private fun notifyPlayer(player: Player, latest: String) {
@@ -177,7 +149,7 @@ class UpdateChecker(
             "<dark_gray>(<click:open_url:'https://modrinth.com/plugin/yotpa'>" +
             "<underlined>Download</underlined></click>)</dark_gray>"
         )
-        player.sendMessage(msg)
+        audiences.player(player).sendMessage(msg)
         player.playSound(player.location, "minecraft:block.note_block.pling", 1.0f, 1.0f)
     }
 

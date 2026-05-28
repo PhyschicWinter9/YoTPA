@@ -66,15 +66,7 @@ class PlayerMoveListener(private val plugin: YoTPA) : Listener {
     fun onPlayerRespawn(event: PlayerRespawnEvent) {
         val player = event.player
         // Small delay so the message appears after the respawn screen clears
-        if (YoTPA.isFolia) {
-            player.scheduler.runDelayed(plugin, { _ ->
-                plugin.sendDeathBackNotification(player)
-            }, null, 20L)
-        } else {
-            plugin.server.scheduler.runTaskLater(plugin, Runnable {
-                plugin.sendDeathBackNotification(player)
-            }, 20L)
-        }
+        plugin.runDelayedForPlayer(player, Runnable { plugin.sendDeathBackNotification(player) }, 20L)
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

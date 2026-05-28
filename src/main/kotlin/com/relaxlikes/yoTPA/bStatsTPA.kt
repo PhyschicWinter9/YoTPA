@@ -1,6 +1,5 @@
 package com.relaxlikes.yoTPA
 
-import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import org.bstats.bukkit.Metrics
 import org.bstats.charts.MultiLineChart
 import org.bstats.charts.SimplePie
@@ -12,7 +11,7 @@ import kotlin.collections.HashMap
 class BStatsTPA(private val plugin: YoTPA) {
 
     // Stored so it can be cancelled on plugin disable
-    private var dailyResetTask: ScheduledTask? = null
+    private var dailyResetTask: Any? = null
     private var dailyResetTaskId: Int = -1
 
     // Counters for all-time statistics
@@ -240,7 +239,7 @@ class BStatsTPA(private val plugin: YoTPA) {
     }
 
     fun shutdown() {
-        dailyResetTask?.cancel()
+        runCatching { dailyResetTask?.javaClass?.getMethod("cancel")?.invoke(dailyResetTask) }
         if (dailyResetTaskId != -1) {
             runCatching { plugin.server.scheduler.cancelTask(dailyResetTaskId) }
         }

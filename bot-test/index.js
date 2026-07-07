@@ -7,8 +7,14 @@
  *      /tpastats, /tpainfo, /tpareload, /back)
  *   3. Edge cases (self, invalid player, no pending, movement cancel)
  *   4. Admin-controlled: large distance + cross-world
- *   5. Stress & performance tests (latency, throughput, cooldown, expiry)
- *   6. Summary report
+ *   5. v1.6.x regression scenarios (destination offline mid-countdown,
+ *      requester quit cleanup, accept-while-moving cancel race, /tpainfo RAM sanity)
+ *   6. Stress & performance tests (latency, throughput, cooldown, expiry)
+ *   7. Summary report
+ *
+ * Core scenarios assert on the plugin's actual chat messages (default
+ * messages.yml wording) — a scenario FAILS if the expected message never
+ * arrives, instead of silently passing on a log line.
  *
  * Usage:
  *   bun run index.js            → full suite
@@ -93,17 +99,38 @@ function waitForMessage(bot, substr, timeoutMs = 6000) {
 const pos  = (bot) => ({ ...bot.entity.position });
 const dist = (a, b) => Math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2);
 
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+/** Collect every chat line a bot receives while fn() runs (plus settleMs after). */
+async function collectMessages(bot, fn, settleMs = 2500) {
+  const lines = [];
+  const handler = (msg) => lines.push(msg.toString());
+  bot.on("message", handler);
+  try {
+    await fn();
+    await sleep(settleMs);
+  } finally {
+    bot.removeListener("message", handler);
+  }
+  return lines;
+}
+
 // ── Functional scenarios ─────────────────────────────────────────
 
-// 1. /tpa → accept → verify sender teleported
+// 1. /tpa → accept → verify sender teleported (hard-asserts on the success message)
 async function scenarioTpaAccept(bots) {
   const [sender, target] = [bots[0], bots[1]];
   sender.chat(`/tpa ${target.username}`);
   await sleep(DELAY.requestWait);
+  const success = waitForMessage(sender, "teleported to", 15000);
   target.chat("/tpaccept");
-  await sleep(8000);
+  await success; // throws if the teleport-success message never arrives
+  await sleep(1500);
   const d = dist(pos(sender), pos(target));
   console.log(`  Sender→target distance after teleport: ${d.toFixed(2)} blocks`);
+  assert(d < 5, `success message received but sender is ${d.toFixed(2)} blocks from target`);
 }
 
 // 2. /tpa → deny
@@ -149,15 +176,18 @@ async function scenarioCooldown(bots) {
   console.log(`  Second request sent (expect cooldown message above)`);
 }
 
-// 7. /tpahere → accept → verify guest teleported to host
+// 7. /tpahere → accept → verify guest teleported to host (hard-asserts on success message)
 async function scenarioTpahereAccept(bots) {
   const [host, guest] = [bots[2], bots[3]];
   host.chat(`/tpahere ${guest.username}`);
   await sleep(DELAY.requestWait);
+  const success = waitForMessage(guest, "teleported to", 15000);
   guest.chat("/tpaccept");
-  await sleep(8000);
+  await success;
+  await sleep(1500);
   const d = dist(pos(guest), pos(host));
   console.log(`  Guest→host distance after teleport: ${d.toFixed(2)} blocks`);
+  assert(d < 5, `success message received but guest is ${d.toFixed(2)} blocks from host`);
 }
 
 // 8. /tpahere → deny
@@ -190,19 +220,21 @@ async function scenarioTpahereInvalidPlayer(bots) {
   await sleep(2000);
 }
 
-// 12. Movement cancels countdown
+// 12. Movement cancels countdown (hard-asserts on the cancellation message)
 async function scenarioMovementCancel(bots) {
   const [sender, target] = [bots[0], bots[1]];
   sender.chat(`/tpa ${target.username}`);
   await sleep(DELAY.requestWait);
+  const cancelled = waitForMessage(sender, "movement", 12000);
   target.chat("/tpaccept");
   await sleep(1000); // let countdown start
   sender.setControlState("forward", true);
   await sleep(800);
   sender.setControlState("forward", false);
-  await sleep(6000);
+  await cancelled; // throws if the movement-cancel message never arrives
+  await sleep(5000); // would-be teleport window — verify nothing happens
   const d = dist(pos(sender), pos(target));
-  console.log(`  Sender distance from target: ${d.toFixed(2)} blocks (large = cancelled ✅)`);
+  console.log(`  Cancelled by movement; sender distance from target: ${d.toFixed(2)} blocks`);
 }
 
 // 13. /tpaccept with no pending request
@@ -405,14 +437,16 @@ async function scenarioBackAfterTpa(bots) {
   const afterTpa = pos(sender);
   console.log(`  After TPA — distance moved: ${dist(origin, afterTpa).toFixed(2)} blocks`);
 
+  const backMsg = waitForMessage(sender, "teleporting back", 8000);
   sender.chat("/back");
-  await sleep(3000);
+  await backMsg;
+  await sleep(2000);
 
   const afterBack = pos(sender);
   const returnDist = dist(afterBack, origin);
   console.log(`  After /back — distance from origin: ${returnDist.toFixed(2)} blocks (should be ~0)`);
-  if (returnDist > 3) console.log(`  ⚠️  /back did not return sender to origin`);
-  else               console.log(`  ✅  Returned to origin correctly`);
+  assert(returnDist < 3, `/back did not return sender to origin (off by ${returnDist.toFixed(2)} blocks)`);
+  console.log(`  ✅  Returned to origin correctly`);
 }
 
 // B2. /back after TPAHERE accept — guest should return to their original position
@@ -458,17 +492,16 @@ async function scenarioBackSingleUse(bots) {
   const after1 = pos(sender);
   const distFromA = dist(after1, posA);
   console.log(`  After /back — dist from A: ${distFromA.toFixed(2)} (expect ~0)`);
-  if (distFromA < 3) console.log(`  ✅  /back returned to origin`);
-  else               console.log(`  ⚠️  /back did not return to origin`);
+  assert(distFromA < 3, `/back did not return to origin (off by ${distFromA.toFixed(2)} blocks)`);
 
   // Second /back immediately — location was consumed; must NOT teleport again.
-  // Expects "cooldown" (back-cooldown: 30 default) or "no location" (if cooldown disabled).
+  // Expects "cooldown" (back-cooldown > 0) or "no location" (if cooldown disabled).
   const posBeforeSecond = { ...pos(sender) };
   sender.chat("/back");
   await sleep(3000);
   const moved = dist(posBeforeSecond, pos(sender)) > 1;
-  if (!moved) console.log(`  ✅  Second /back did not teleport — location was consumed (single-use confirmed)`);
-  else        console.log(`  ⚠️  Second /back teleported the player — location was NOT consumed`);
+  assert(!moved, "second /back teleported the player — saved location was NOT consumed");
+  console.log(`  ✅  Second /back did not teleport — location was consumed (single-use confirmed)`);
 }
 
 // B4. /back with no prior location (fresh join, never teleported)
@@ -703,6 +736,97 @@ async function scenarioBackConcurrent(bots) {
   console.log(`  ✅  No crashes = lastLocations ConcurrentHashMap is thread-safe`);
 }
 
+// ── v1.6.x regression scenarios ─────────────────────────────────
+
+// R1. Destination goes offline mid-countdown → countdown cancelled, sender notified,
+//     sender NOT teleported. (Regression guard for the offline-destination cancel path.)
+async function scenarioDestinationOffline(bots) {
+  const [sender, target] = [bots[0], bots[4]];
+  sender.chat(`/tpa ${target.username}`);
+  await sleep(DELAY.requestWait);
+
+  const before = pos(sender);
+  const offlineMsg = waitForMessage(sender, "offline", 12000);
+  target.chat("/tpaccept");
+  await sleep(1500);        // countdown running (teleport-delay must be ≥ 3s)
+  target.quit();            // destination disconnects mid-countdown
+  await offlineMsg;         // throws if the cancel message never arrives
+  await sleep(4000);        // would-be teleport window
+  const moved = dist(before, pos(sender));
+  assert(moved < 1, `sender moved ${moved.toFixed(2)} blocks despite destination going offline`);
+  console.log(`  ✅  Countdown cancelled, sender stayed put`);
+
+  await sleep(5000);        // respect Paper's connection throttle before rejoin
+  bots[4] = await createBot(BOT_NAMES[4]);
+  await sleep(DELAY.afterSpawn);
+}
+
+// R2. Requester quits before the target accepts → the pending request is cleaned up
+//     on quit, so /tpaccept must NOT teleport anyone and must report no-request/offline.
+async function scenarioRequesterQuit(bots) {
+  const [sender, target] = [bots[4], bots[1]];
+  sender.chat(`/tpa ${target.username}`);
+  await sleep(DELAY.requestWait);
+  sender.quit();            // requester disconnects with the request pending
+  await sleep(2500);        // quit-cleanup runs
+
+  const lines = await collectMessages(target, async () => {
+    target.chat("/tpaccept");
+  }, 3000);
+  const response = lines.join(" | ").toLowerCase();
+  console.log(`  /tpaccept response: ${response || "(none)"}`);
+  assert(
+    response.includes("no pending") || response.includes("offline"),
+    `expected no-request/offline response, got: "${response}"`
+  );
+  console.log(`  ✅  Stale request was cleaned up on requester quit`);
+
+  await sleep(5000);
+  bots[4] = await createBot(BOT_NAMES[4]);
+  await sleep(DELAY.afterSpawn);
+}
+
+// R3. Target accepts while the sender is ALREADY moving — the movement-cancel and the
+//     countdown start race each other. The countdown must end cancelled, never teleport.
+//     (Regression guard for the v1.6.1 Folia countdown-start/cancel race fix.)
+async function scenarioAcceptWhileMoving(bots) {
+  const [sender, target] = [bots[0], bots[1]];
+  sender.chat(`/tpa ${target.username}`);
+  await sleep(DELAY.requestWait);
+
+  const cancelled = waitForMessage(sender, "movement", 12000);
+  sender.setControlState("forward", true);   // moving BEFORE the accept lands
+  target.chat("/tpaccept");
+  await sleep(1200);
+  sender.setControlState("forward", false);
+  await cancelled; // throws if the countdown survived the race
+  await sleep(5000); // would-be teleport window — nothing should happen
+  console.log(`  ✅  Countdown cancelled despite accept landing mid-movement`);
+}
+
+// R4. /tpainfo RAM figures are sane: 0 < available ≤ max.
+//     (Regression guard for the v1.6.1 available-RAM calculation fix.)
+async function scenarioInfoRamSanity(bots) {
+  const bot = bots[0];
+  const lines = await collectMessages(bot, async () => {
+    bot.chat("/tpainfo");
+  }, 2500);
+
+  const grab = (re) => {
+    for (const l of lines) {
+      const m = l.match(re);
+      if (m) return parseInt(m[1].replace(/[,.]/g, ""), 10);
+    }
+    return null;
+  };
+  const avail = grab(/available ram:?\s*([\d,.]+)/i);
+  const max   = grab(/max ram:?\s*([\d,.]+)/i);
+  console.log(`  Available RAM: ${avail} MB, Max RAM: ${max} MB`);
+  assert(avail !== null && max !== null, "could not parse RAM lines from /tpainfo output");
+  assert(avail > 0 && avail <= max, `available RAM ${avail} MB not within (0, max ${max} MB]`);
+  console.log(`  ✅  RAM headroom figure is sane`);
+}
+
 // 18. Simultaneous multi-bot stress (functional pass)
 async function scenarioSimultaneous(bots) {
   bots[0].chat(`/tpa ${bots[1].username}`);
@@ -817,6 +941,17 @@ async function main() {
       () => scenarioBackCooldown(bots));
     await run("BACK — bypass.back-cooldown permission",
       () => scenarioBackCooldownBypass(bots, admin));
+
+    // ── v1.6.x regression scenarios ──
+    // (last: R1/R2 disconnect and rejoin bots[4])
+    await run("REGRESSION — accept while already moving (cancel race)",
+      () => scenarioAcceptWhileMoving(bots));
+    await run("REGRESSION — /tpainfo RAM figures sane (0 < available ≤ max)",
+      () => scenarioInfoRamSanity(bots));
+    await run("REGRESSION — destination offline mid-countdown (cancel + no teleport)",
+      () => scenarioDestinationOffline(bots));
+    await run("REGRESSION — requester quits before accept (request cleaned up)",
+      () => scenarioRequesterQuit(bots));
 
     printSummary();
   }

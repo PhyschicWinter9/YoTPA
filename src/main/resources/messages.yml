@@ -135,6 +135,13 @@ teleport:
     receiver: "<red>Teleport request from {requester} has expired.</red>"
 
 # ═══════════════════════════════════════════════════════════════
+#                        UPDATE MESSAGES
+# ═══════════════════════════════════════════════════════════════
+
+update:
+  available: "<yellow>Update available:</yellow> <white>v{current}</white> <gray>→</gray> <green>v{latest}</green> <dark_gray>(<click:open_url:'https://modrinth.com/plugin/yotpa'><underlined>Download</underlined></click>)</dark_gray>"
+
+# ═══════════════════════════════════════════════════════════════
 #                         ERROR MESSAGES
 # ═══════════════════════════════════════════════════════════════
 

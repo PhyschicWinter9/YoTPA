@@ -2,11 +2,10 @@ plugins {
     kotlin("jvm") version "2.3.0"
     id("com.gradleup.shadow") version "8.3.0"
     id("xyz.jpenilla.run-paper") version "2.3.1"
-    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 object VersionConfig {
-    const val PLUGIN_VERSION = "1.6.0"
+    const val PLUGIN_VERSION = "1.6.1"
 }
 
 group = "com.relaxlikes"
@@ -25,9 +24,11 @@ repositories {
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
     implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
-    implementation("net.kyori:adventure-api:4.20.0")
-    implementation("net.kyori:adventure-text-minimessage:4.20.0")
-    implementation("org.bstats:bstats-bukkit:3.0.2")
+    // Adventure is provided natively by Paper — compileOnly avoids shading an
+    // unrelocated copy that would shadow the server's (newer) Adventure on 26.x
+    compileOnly("net.kyori:adventure-api:4.20.0")
+    compileOnly("net.kyori:adventure-text-minimessage:4.20.0")
+    implementation("org.bstats:bstats-bukkit:3.1.0")
 }
 
 tasks {

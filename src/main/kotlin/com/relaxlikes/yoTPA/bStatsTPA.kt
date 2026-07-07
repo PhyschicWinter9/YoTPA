@@ -59,21 +59,22 @@ class BStatsTPA(private val plugin: YoTPA) {
      * Set up configuration related charts
      */
     private fun setupConfigCharts(metrics: Metrics) {
+        // Chart suppliers run on bStats' own submission threads — read the plugin's
+        // @Volatile cached values, never the (non-thread-safe) FileConfiguration.
+
         // Teleport delay setting
         metrics.addCustomChart(SimplePie("teleport_delay") {
-            val delay = plugin.config.getInt("teleport-delay", 5)
-            delay.toString()
+            plugin.currentTeleportDelay.toString()
         })
 
         // Title display enabled/disabled
         metrics.addCustomChart(SimplePie("titles_enabled") {
-            if (plugin.config.getBoolean("features.titles", true)) "Enabled" else "Disabled"
+            if (plugin.currentTitlesEnabled) "Enabled" else "Disabled"
         })
 
         // Request timeout setting
         metrics.addCustomChart(SimplePie("request_timeout") {
-            val timeout = plugin.config.getInt("request-timeout", 60)
-            when (timeout) {
+            when (val timeout = plugin.currentRequestTimeout) {
                 in 0..30 -> "0-30 seconds"
                 in 31..60 -> "31-60 seconds"
                 in 61..120 -> "61-120 seconds"
@@ -83,8 +84,7 @@ class BStatsTPA(private val plugin: YoTPA) {
 
         // Request cooldown setting
         metrics.addCustomChart(SimplePie("request_cooldown") {
-            val cooldown = plugin.config.getInt("request-cooldown", 30)
-            when (cooldown) {
+            when (val cooldown = plugin.currentRequestCooldown) {
                 in 0..15 -> "0-15 seconds"
                 in 16..30 -> "16-30 seconds"
                 in 31..60 -> "31-60 seconds"
@@ -150,7 +150,9 @@ class BStatsTPA(private val plugin: YoTPA) {
         // Calculate delay until next midnight
         val currentTimeMillis = System.currentTimeMillis()
         val midnightMillis = calendar.timeInMillis
-        val delayTicks = (midnightMillis - currentTimeMillis) / 50
+        // coerceAtLeast(1): a server starting within ~50 ms of midnight would yield 0,
+        // which Folia's scheduler rejects
+        val delayTicks = ((midnightMillis - currentTimeMillis) / 50).coerceAtLeast(1L)
 
         val resetTask = Runnable {
             dailyRequestsSent.set(0)

@@ -10,6 +10,6 @@
     "stress": "bun run scenarios/stress.js"
   },
   "dependencies": {
-    "mineflayer": "^4.37.0"
+    "mineflayer": "^4.37.1"
   }
 }

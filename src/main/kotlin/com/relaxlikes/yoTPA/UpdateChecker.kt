@@ -1,7 +1,9 @@
 package com.relaxlikes.yoTPA
 
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask
-import net.kyori.adventure.text.minimessage.MiniMessage
+import org.bukkit.NamespacedKey
+import org.bukkit.Registry
+import org.bukkit.Sound
 import org.bukkit.entity.Player
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
@@ -24,7 +26,8 @@ import java.util.logging.Level
 class UpdateChecker(
     private val plugin: JavaPlugin,
     private val currentVersion: String,
-    private val githubRepo: String
+    private val githubRepo: String,
+    private val messages: MessageManager
 ) : Listener {
 
     @Volatile var latestVersion: String? = null
@@ -36,8 +39,12 @@ class UpdateChecker(
     // Version we last alerted about — prevents re-notifying for the same release
     @Volatile private var notifiedVersion: String? = null
 
-    private val miniMessage = MiniMessage.miniMessage()
     private val apiUrl = "https://api.github.com/repos/$githubRepo/releases/latest"
+
+    // Resolved once via the registry — replaces the deprecated string-based playSound overload
+    private val notifySound: Sound? by lazy {
+        Registry.SOUNDS.get(NamespacedKey.minecraft("block.note_block.pling"))
+    }
 
     private var periodicFoliaTask: ScheduledTask? = null
     private var periodicTaskId: Int = -1
@@ -49,7 +56,13 @@ class UpdateChecker(
 
     /** Run the startup check and schedule the daily re-check. */
     fun check() {
-        runCheck(isStartup = true)
+        // Never run the HTTP request on the startup thread — with 5 s connect + 5 s read
+        // timeouts a slow GitHub API would stall server startup by up to ~10 s
+        if (YoTPA.isFolia) {
+            plugin.server.asyncScheduler.runNow(plugin) { _ -> runCheck(isStartup = true) }
+        } else {
+            plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable { runCheck(isStartup = true) })
+        }
         scheduleDailyCheck()
     }
 
@@ -171,14 +184,10 @@ class UpdateChecker(
     }
 
     private fun notifyPlayer(player: Player, latest: String) {
-        val msg = miniMessage.deserialize(
-            "<green><bold>[<aqua>YoTPA</aqua>]</bold></green>  <yellow>Update available:</yellow> " +
-            "<white>v$currentVersion</white> <gray>→</gray> <green>v$latest</green> " +
-            "<dark_gray>(<click:open_url:'https://modrinth.com/plugin/yotpa'>" +
-            "<underlined>Download</underlined></click>)</dark_gray>"
-        )
-        player.sendMessage(msg)
-        player.playSound(player.location, "minecraft:block.note_block.pling", 1.0f, 1.0f)
+        player.sendMessage(messages.getUpdateAvailable(currentVersion, latest))
+        if (plugin.config.getBoolean("features.sounds", true)) {
+            notifySound?.let { player.playSound(player, it, 1.0f, 1.0f) }
+        }
     }
 
     // ─── Version comparison ───────────────────────────────────────────────────

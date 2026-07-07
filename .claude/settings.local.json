@@ -3,7 +3,8 @@
     "allow": [
       "Bash(curl -s \"https://raw.githubusercontent.com/PaperMC/Paper/dev%2F26.1/build.gradle.kts\")",
       "Bash(curl -s \"https://raw.githubusercontent.com/PaperMC/Paper/refs/heads/dev%2F26.1/build.gradle.kts\")",
-      "Bash(JAVA_HOME=\"/c/Program Files/Eclipse Adoptium/jdk-21.0.7.6-hotspot\" ./gradlew build --console=plain)"
+      "Bash(JAVA_HOME=\"/c/Program Files/Eclipse Adoptium/jdk-21.0.7.6-hotspot\" ./gradlew build --console=plain)",
+      "WebFetch(domain:papermc.io)"
     ]
   },
   "enabledPlugins": {

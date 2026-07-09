@@ -11,3 +11,5 @@ RELEASE_NOTES.md
 .agents/skills/
 
 bot-test/config.js
+
+.claude/settings.local.json

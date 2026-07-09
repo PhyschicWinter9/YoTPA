@@ -23,11 +23,10 @@ class PlayerMoveListener(private val plugin: YoTPA) : Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     fun onPlayerMove(event: PlayerMoveEvent) {
-        val from = event.from
-        val to   = event.to
-
         // Ultra-fast early exit: skip pure head rotation (no position change)
-        if (from.x == to.x && from.y == to.y && from.z == to.z) return
+        if (!event.hasChangedPosition()) return
+
+        val to = event.to
 
         val player = event.player
 

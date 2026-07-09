@@ -1,11 +1,12 @@
 name: YoTPA
-version: 1.6.0
+# Injected from VersionConfig.PLUGIN_VERSION in build.gradle.kts via processResources
+version: ${version}
 main: com.relaxlikes.yoTPA.YoTPA
 api-version: 1.21
 folia-supported: true
 author: PhyschicWinter9 & VIBEs Coding XD
 description: Smart adaptive teleport plugin that automatically optimizes for any server size
-website: https://github.com/relaxlikes/yoTPA
+website: https://github.com/PhyschicWinter9/YoTPA
 
 # Load early to reduce startup time
 load: STARTUP
@@ -86,6 +87,10 @@ permissions:
     description: Bypass request timeout expiration
     default: op
 
+  yotpa.admin:
+    description: Receive update notifications
+    default: op
+
   yotpa.*:
     description: All YoTPA permissions
     default: op
@@ -98,3 +103,4 @@ permissions:
       yotpa.bypass.cooldown: true
       yotpa.bypass.back-cooldown: true
       yotpa.bypass.timeout: true
+      yotpa.admin: true

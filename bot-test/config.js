@@ -21,9 +21,15 @@ export const BOT_NAMES = [
 
 // ── YoTPA plugin version check ─────────────────────────────────
 export const PLUGIN = {
-  currentVersion: '1.6.0',
+  currentVersion: '1.6.1',
   githubRepo: 'PhyschicWinter9/YoTPA',
 };
+
+// ── Recommended test-server config.yml for fast, reliable runs ──
+// request-timeout: 15    (timeout scenarios wait up to 70s)
+// request-cooldown: 5    (suite fires many requests from the same bots)
+// teleport-delay: 5      (movement/offline-cancel scenarios need a real window)
+// back-cooldown: 10      (B10 needs it > 0, bypass test B11 needs it > 0)
 
 
 // ── Admin bot (must be OP on the server) ───────────────────────

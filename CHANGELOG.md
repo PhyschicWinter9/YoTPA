@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.1] - 2026-07-07
+
+### 🔧 Folia Thread-Safety Hardening, Faster Startup, ~35% Smaller JAR
+
+### Fixed
+
+#### Thread-Safety (Folia)
+- **Countdown started on the wrong region thread** — accepting a plain `/tpa` ran `startTeleportCountdown` on the *accepter's* region thread, reading the requester's location and showing their title cross-region; the countdown setup is now dispatched to the teleporter's own entity scheduler
+- **Ghost-countdown race** — a movement-cancel firing between countdown-data storage and task registration could leave a running task with no cancellable handle, completing a teleport that had been cancelled; dispatching to the owner thread serialises start with move events, and a stale-task guard makes each countdown tick verify its data entry is still current before advancing
+- **Cross-region location read in `playSound`** — sounds sent to the *other* player (request received, deny) read `player.location`, a region-guarded accessor on Folia; switched to the entity-emitter `playSound(player, sound, …)` overload
+- **`MessageManager` publication** — `messagesConfig` and the cached prefix are now `@Volatile`, so executor threads (request expiry) and Folia region threads reliably see the state after `/tpareload`
+- **bStats chart callbacks** — now read the plugin's cached `@Volatile` config values instead of touching the non-thread-safe `FileConfiguration` from bStats' submission threads
+- **bStats daily reset on Folia** — a server starting within ~50 ms of midnight produced a 0-tick delay, which Folia's scheduler rejects; now coerced to ≥1 tick
+
+#### Correctness
+- **`/back` into an unloaded world** — now fails gracefully with the "no previous location" message instead of throwing when the saved world has been unloaded (Multiverse etc.)
+- **Player-name cache poisoning** — a lookup for an offline player permanently cached `"Unknown"` (and leaked the entry, since quit-cleanup had already run); failed lookups are no longer cached
+- **`/tpainfo` Available RAM** — previously reported free space inside the currently committed heap; now reports true headroom (`max − used`)
+- **Dotted sound keys not normalised** — `Block.Note_Block.Pling` style values threw inside `NamespacedKey` and silently fell back to the default sound; dotted keys are now lowercased like underscore keys
+
+#### Performance
+- **Startup no longer blocks on the update check** — the GitHub Releases request ran synchronously in `onEnable()` and could stall server startup by up to ~10 s on a slow network; it now runs on the async scheduler on both Paper and Folia
+
+### Changed
+- **JAR size reduced from ~3.0 MB to ~1.9 MB** — Adventure API and MiniMessage are no longer shaded into the JAR (`compileOnly`); Paper provides them natively, and bundling an unrelocated copy risked shadowing the server's newer Adventure on 26.x
+- **Update notification message moved to `messages.yml`** — new `update.available` key (customizable/translatable, auto-merged into existing server files); the notification also respects `features.sounds` and uses the non-deprecated registry-based sound API
+- **bStats bumped** from 3.0.2 to 3.1.0
+- **`yotpa.admin` permission declared** in `plugin.yml` (default: OP, included in `yotpa.*`) — previously used by the update notifier but undeclared
+- **`plugin.yml` version now injected from the build** — single source of truth in `build.gradle.kts`
+- **Build cleanup** — removed the duplicate legacy Shadow plugin (`com.github.johnrengelman.shadow`) that was applied alongside its maintained fork
+- **`plugin.yml` website URL fixed** to the actual repository
+
+### Notes
+- No new config keys, no migration — drop-in replacement for v1.6.0
+
+---
+
 ## [1.6.0] - 2026-04-12
 
 ### 🎉 /back Command, Full Folia Support, Performance & Thread-Safety

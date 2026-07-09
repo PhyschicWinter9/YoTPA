@@ -188,7 +188,7 @@ class YoTPA : JavaPlugin() {
         bStats = BStatsTPA(this)
         bStats.initialize()
 
-        updateChecker = UpdateChecker(this, pluginVersion, "PhyschicWinter9/YoTPA")
+        updateChecker = UpdateChecker(this, pluginVersion, "PhyschicWinter9/YoTPA", messageManager)
         updateChecker.check()
 
         registerCommands()
@@ -359,6 +359,14 @@ class YoTPA : JavaPlugin() {
     /** Read by PlayerMoveListener on every event — volatile read, no lock. */
     fun getMovementThreshold(): Double = settings.movementThreshold
 
+    // Read-only views of the cached config values for BStatsTPA's chart callbacks —
+    // bStats invokes suppliers from its own submission threads, where touching the
+    // (non-thread-safe) FileConfiguration could race with /tpareload.
+    val currentTeleportDelay: Int get() = teleportDelay
+    val currentRequestTimeout: Int get() = requestTimeout
+    val currentRequestCooldown: Int get() = requestCooldown
+    val currentTitlesEnabled: Boolean get() = titlesEnabled
+
     /**
      * Save a player's current location as their /back destination.
      * Called by PlayerMoveListener on death so /back returns to the death spot.
@@ -520,12 +528,13 @@ class YoTPA : JavaPlugin() {
         }
 
         val lastLocation = lastLocations[player.uniqueId]
-        if (lastLocation == null) {
+        // isWorldLoaded guard: the saved world may have been unloaded since (Multiverse etc.) —
+        // teleport/teleportAsync would throw instead of failing gracefully
+        if (lastLocation == null || !lastLocation.isWorldLoaded) {
+            if (lastLocation != null) lastLocations.remove(player.uniqueId)
             sendMessage(player, messageManager.getBackNoLocation())
             return
         }
-
-        val currentLocation = player.location.clone()
 
         if (isFolia) {
             player.teleportAsync(lastLocation).thenAccept { success ->
@@ -653,6 +662,19 @@ class YoTPA : JavaPlugin() {
     // ─── Teleport lifecycle ───────────────────────────────────────────────────
 
     fun startTeleportCountdown(teleporter: Player, destination: Player) {
+        if (isFolia) {
+            // The teleporter may be owned by a different region than the command sender
+            // (plain /tpa: teleporter = requester). Its location read, title, and task
+            // registration must run on ITS region thread. Dispatching also serialises the
+            // countdown start with the teleporter's move events, closing the window where
+            // a movement-cancel fires before the task handle is registered.
+            teleporter.scheduler.run(this, { _ -> beginCountdown(teleporter, destination) }, null)
+        } else {
+            beginCountdown(teleporter, destination)
+        }
+    }
+
+    private fun beginCountdown(teleporter: Player, destination: Player) {
         cancelTeleport(teleporter.uniqueId)
 
         storeCountdownOrigin(teleporter.uniqueId, teleporter.location.clone())
@@ -679,8 +701,12 @@ class YoTPA : JavaPlugin() {
         // Folia: per-entity task required for region-thread ownership
         // Paper: the single batch task in startPaperBatchTask() handles all countdowns
         if (isFolia) {
-            teleporter.scheduler.runAtFixedRate(this, { _ ->
-                processCountdown(teleporter, data)
+            teleporter.scheduler.runAtFixedRate(this, { task ->
+                // Stale-task guard: never advance a countdown whose data entry was
+                // cancelled or replaced — cancel this task instead of touching the map,
+                // which may already hold the handle of a newer countdown.
+                if (teleportData[teleporter.uniqueId] !== data) task.cancel()
+                else processCountdown(teleporter, data)
             }, null, settings.countdownInterval, settings.countdownInterval)
                 ?.let { teleportTasks[teleporter.uniqueId] = it }
         }
@@ -930,17 +956,16 @@ class YoTPA : JavaPlugin() {
         return true
     }
 
-    private fun getPlayerByName(name: String): Player? =
-        Bukkit.getPlayer(name) ?: Bukkit.getOnlinePlayers().find { it.name.equals(name, ignoreCase = true) }
+    // Bukkit.getPlayer(String) already matches case-insensitively — no manual O(n) scan needed
+    private fun getPlayerByName(name: String): Player? = Bukkit.getPlayer(name)
 
     private fun getPlayerName(uuid: UUID): String {
-        return if (settings.enablePlayerCache) {
-            // computeIfAbsent is atomic — the mapping function runs at most once per key
-            // even under concurrent access, unlike Kotlin's getOrPut extension.
-            playerNameCache.computeIfAbsent(uuid) { Bukkit.getPlayer(uuid)?.name ?: "Unknown" }
-        } else {
-            Bukkit.getPlayer(uuid)?.name ?: "Unknown"
-        }
+        playerNameCache[uuid]?.let { return it }
+        // Never cache a failed lookup: the player is offline, so cleanupPlayerOnQuit
+        // will never remove the entry — a cached "Unknown" would be both wrong and a leak.
+        val name = Bukkit.getPlayer(uuid)?.name ?: return "Unknown"
+        if (settings.enablePlayerCache) playerNameCache[uuid] = name
+        return name
     }
 
     private fun storeRequest(requester: Player, target: Player, isHereRequest: Boolean) {
@@ -1011,7 +1036,9 @@ class YoTPA : JavaPlugin() {
     private fun parseSoundKey(soundName: String, default: NamespacedKey): NamespacedKey {
         return runCatching {
             val key = if (soundName.contains(".")) {
-                NamespacedKey.minecraft(soundName)
+                // lowercase here too — "Block.Note_Block.Pling" would otherwise throw
+                // inside NamespacedKey.minecraft and silently fall back to the default
+                NamespacedKey.minecraft(soundName.lowercase())
             } else {
                 NamespacedKey.minecraft(soundName.lowercase().replace("_", "."))
             }
@@ -1038,7 +1065,9 @@ class YoTPA : JavaPlugin() {
         if (!soundsEnabled) return
         sound ?: return
         runCatching {
-            player.playSound(player.location, sound, 1.0f, 1.0f)
+            // Entity-emitter overload — avoids reading player.location, which is a
+            // region-guarded accessor on Folia when the player is owned by another region
+            player.playSound(player, sound, 1.0f, 1.0f)
         }.onFailure { e ->
             logger.log(Level.WARNING, "Failed to play sound", e)
         }
@@ -1053,7 +1082,7 @@ class YoTPA : JavaPlugin() {
             warnings.add("Sound '$key' is not set, using default"); return
         }
         val testKey = runCatching {
-            if (soundName.contains(".")) NamespacedKey.minecraft(soundName)
+            if (soundName.contains(".")) NamespacedKey.minecraft(soundName.lowercase())
             else NamespacedKey.minecraft(soundName.lowercase().replace("_", "."))
         }.getOrNull()
 
@@ -1119,7 +1148,13 @@ class YoTPA : JavaPlugin() {
     // ─── Utility ─────────────────────────────────────────────────────────────
 
     private fun getMaxMemoryMB(): Long = Runtime.getRuntime().maxMemory() / 1024 / 1024
-    private fun getAvailableMemoryMB(): Long = Runtime.getRuntime().freeMemory() / 1024 / 1024
+
+    // freeMemory() alone only measures free space inside the currently committed heap;
+    // true headroom is max minus what is actually used
+    private fun getAvailableMemoryMB(): Long {
+        val rt = Runtime.getRuntime()
+        return (rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())) / 1024 / 1024
+    }
 
     private fun getOptimizationLevel(): String = when (detectedMode) {
         PerformanceMode.ULTRA_LIGHT -> "Maximum (For 512 MB RAM)"

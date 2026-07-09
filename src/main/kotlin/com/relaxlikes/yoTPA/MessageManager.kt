@@ -13,11 +13,15 @@ import java.util.logging.Level
  */
 class MessageManager(private val plugin: JavaPlugin) {
 
+    // @Volatile: rewritten on the main thread by /tpareload but read from executor
+    // threads (request expiry) and Folia region threads — needs safe publication
+    @Volatile
     private lateinit var messagesConfig: FileConfiguration
     private lateinit var messagesFile: File
     private val miniMessage = MiniMessage.miniMessage()
 
     // Cache for parsed prefix component
+    @Volatile
     private var prefixComponent: Component? = null
 
     /**
@@ -212,6 +216,10 @@ class MessageManager(private val plugin: JavaPlugin) {
         val plural = if (cooldown != 1L) "s" else ""
         return getMessageWithPrefix("commands.back.cooldown", mapOf("cooldown" to cooldown.toString(), "plural" to plural))
     }
+
+    // Update Notification Messages
+    fun getUpdateAvailable(current: String, latest: String) =
+        getMessageWithPrefix("update.available", mapOf("current" to current, "latest" to latest))
 
     // Error Messages
     fun getPlayerNotFound(player: String) = getMessageWithPrefix("errors.player-not-found", mapOf("player" to player))

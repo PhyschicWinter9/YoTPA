@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "bun run index.js",
+    "manual": "bun run manual.js",
     "tpa": "bun run scenarios/tpa.js",
     "tpahere": "bun run scenarios/tpahere.js",
     "stress": "bun run scenarios/stress.js"

@@ -331,13 +331,18 @@ CI (`.github/workflows/`):
 - `ci.yml` — runs on every branch push and every PR into `main`: JDK 21, guards against a
   stray literal `$` in `plugin.yml`/`messages.yml` (see §6 gotchas), `clean build`, uploads
   the JAR as a build artifact. No unit tests exist (§9) — this is a build-correctness gate only.
-- `release.yml` — runs only on a `v*.*.*` tag push (or manual `workflow_dispatch` against an
-  existing tag ref): verifies the tag matches `PLUGIN_VERSION`, extracts that version's
-  `## [<version>]` section from `CHANGELOG.md` as the Release body (failing the release if the
-  entry is missing — enforces checklist step 2 rather than trusting it happened), builds, and
-  creates the GitHub Release with that changelog section plus GitHub's auto-generated commit
-  notes appended. There is no commit-message-triggered release path — tagging is the only
-  release trigger, kept deliberately simple to avoid CI pushing its own tags/commits.
+- `release.yml` — runs on a `v*.*.*` tag push, or manually via `workflow_dispatch` with a
+  **required `tag` input** naming an existing `vX.Y.Z` tag to re-release. The manual path does
+  *not* trust which branch/ref the run was launched against — a run launched from `main`
+  once resolved `github.ref_name` to `"main"` itself and failed the version check as `vmain`;
+  the `tag` input is validated (`v<major>.<minor>.<patch>` shape) and checked out explicitly
+  before anything else runs. Either path then: verifies the tag matches `PLUGIN_VERSION`,
+  extracts that version's `## [<version>]` section from `CHANGELOG.md` as the Release body
+  (failing the release if the entry is missing — enforces checklist step 2 rather than trusting
+  it happened), builds, and creates the GitHub Release with that changelog section plus GitHub's
+  auto-generated commit notes appended. There is no commit-message-triggered release path —
+  tagging is the only release trigger, kept deliberately simple to avoid CI pushing its own
+  tags/commits.
 
 **Branches** — `main` = released; `dev/<mc-version>` = active development (currently `dev/26.2`);
 `feat/<name>`; `backup/<version>` snapshots.

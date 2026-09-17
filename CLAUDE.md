@@ -319,14 +319,25 @@ fix/optimization releases bump patch (1.6.1). The only place a version is writte
    migration steps) — this file's newest section becomes the Modrinth version description.
 4. Update the compatibility matrix (§4) if the supported range changed.
 5. Build + run the bot suite (§9) against the primary target version.
-6. Commit; release via **either** a commit on `main` containing `[release]` or `[version]`
-   (CI `build-and-release.yml` extracts the version, creates tag `v<version>`, uploads the JAR
-   to a GitHub Release) **or** pushing a `v*` tag directly.
+6. Commit the version bump + docs to `main`. Then tag that commit and push the tag:
+   `git tag v<version> && git push origin v<version>`. CI (`release.yml`) verifies the tag
+   matches `VersionConfig.PLUGIN_VERSION` in `build.gradle.kts` **exactly** (fails fast on
+   mismatch rather than shipping a JAR whose internal version disagrees with the release tag),
+   builds, and publishes a GitHub Release with `build/libs/YoTPA-<version>.jar` attached.
 7. **Modrinth upload is manual** — upload the JAR, paste the new `RELEASE_NOTES_MODRINTH.md`
    section, set the game-version range and loaders (Paper, Folia, Purpur).
 
-CI: `build.yml` builds every push to `dev/**` and PRs to main (JDK 21, `clean build`, uploads
-artifact). `build-and-release.yml` handles main/tags as above.
+CI (`.github/workflows/`):
+- `ci.yml` — runs on every branch push and every PR into `main`: JDK 21, guards against a
+  stray literal `$` in `plugin.yml`/`messages.yml` (see §6 gotchas), `clean build`, uploads
+  the JAR as a build artifact. No unit tests exist (§9) — this is a build-correctness gate only.
+- `release.yml` — runs only on a `v*.*.*` tag push (or manual `workflow_dispatch` against an
+  existing tag ref): verifies the tag matches `PLUGIN_VERSION`, extracts that version's
+  `## [<version>]` section from `CHANGELOG.md` as the Release body (failing the release if the
+  entry is missing — enforces checklist step 2 rather than trusting it happened), builds, and
+  creates the GitHub Release with that changelog section plus GitHub's auto-generated commit
+  notes appended. There is no commit-message-triggered release path — tagging is the only
+  release trigger, kept deliberately simple to avoid CI pushing its own tags/commits.
 
 **Branches** — `main` = released; `dev/<mc-version>` = active development (currently `dev/26.2`);
 `feat/<name>`; `backup/<version>` snapshots.

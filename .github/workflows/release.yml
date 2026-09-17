@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # VersionConfig.PLUGIN_VERSION in build.gradle.kts is the single source
+      # of truth (CLAUDE.md §1/§7). The release tag must match it exactly, or
+      # this fails fast instead of shipping a JAR whose internal version
+      # disagrees with the GitHub Release tag / Modrinth listing.
+      - name: Resolve and verify version
+        id: version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          BUILD=$(grep -oP 'PLUGIN_VERSION\s*=\s*"\K[^"]+' build.gradle.kts)
+          echo "tag=$TAG"
+          echo "build.gradle.kts=$BUILD"
+          if [ "$TAG" != "$BUILD" ]; then
+            echo "::error::Tag v$TAG does not match VersionConfig.PLUGIN_VERSION ($BUILD) in build.gradle.kts"
+            exit 1
+          fi
+          echo "version=$BUILD" >> "$GITHUB_OUTPUT"
+
+      # Release checklist (CLAUDE.md §7) requires a CHANGELOG.md entry before
+      # tagging — this pulls that entry in as the Release body, and fails the
+      # release outright if it's missing instead of publishing without notes.
+      - name: Extract changelog section for this version
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { found=1; next }
+            found && (index($0, "## [") == 1 || $0 == "---") { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::No CHANGELOG.md section found for version $VERSION (expected a '## [$VERSION]' heading)."
+            exit 1
+          fi
+          cat release-notes.md
+
+      - name: Build
+        run: |
+          chmod +x gradlew
+          ./gradlew clean build --no-daemon
+
+      - name: Verify release JAR exists
+        shell: bash
+        run: test -f "build/libs/YoTPA-${{ steps.version.outputs.version }}.jar"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "YoTPA ${{ steps.version.outputs.version }}"
+          body_path: release-notes.md
+          files: build/libs/YoTPA-${{ steps.version.outputs.version }}.jar
+          generate_release_notes: true

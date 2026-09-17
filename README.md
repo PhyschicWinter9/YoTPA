@@ -5,7 +5,7 @@
 YoTPA is a lightweight and powerful teleport request plugin with adaptive performance optimization. Simple to use, easy to configure, and built for modern Minecraft servers.
 
 <!-- Build & Version Badges -->
-[![Build](https://github.com/PhyschicWinter9/YoTPA/actions/workflows/build.yml/badge.svg)](https://github.com/PhyschicWinter9/YoTPA/actions/workflows/build.yml)
+[![Build](https://github.com/PhyschicWinter9/YoTPA/actions/workflows/ci.yml/badge.svg)](https://github.com/PhyschicWinter9/YoTPA/actions/workflows/ci.yml)
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/PhyschicWinter9/YoTPA)](https://github.com/PhyschicWinter9/YoTPA/releases)
 [![GitHub all releases](https://img.shields.io/github/downloads/PhyschicWinter9/YoTPA/total)](https://github.com/PhyschicWinter9/YoTPA/releases)
 [![Paper API](https://img.shields.io/badge/Paper--API-1.21.5-yellow)](https://papermc.io/)

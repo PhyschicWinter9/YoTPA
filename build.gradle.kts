@@ -5,7 +5,7 @@ plugins {
 }
 
 object VersionConfig {
-    const val PLUGIN_VERSION = "1.6.1"
+    const val PLUGIN_VERSION = "1.6.2"
 }
 
 group = "com.relaxlikes"
@@ -51,7 +51,7 @@ val targetJavaVersion = 21
 kotlin {
     jvmToolchain(25)
     compilerOptions {
-        // Emit Java 21 bytecode so the plugin runs on both 1.21.x (Java 21) and 26.1.x (Java 25) servers
+        // Emit Java 21 bytecode so the plugin runs on both 1.21.x (Java 21) and 26.x (Java 25) servers
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
     }
 }

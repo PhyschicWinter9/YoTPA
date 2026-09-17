@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.2] - 2026-09-17
+
+### 🧭 Paper 26.3 Compatibility Verification
+
+### Notes
+- **No code changes.** This release verifies compatibility with Minecraft/Paper 26.3
+  ("Wilderness Bound", shipped 2026-09-15/16) and documents the findings — the plugin already
+  supported it via Paper's API stability.
+- Audited the plugin's full Bukkit/Paper/Adventure API surface against known 26.x changes
+  (including the 26.2 Adventure 5 `BookMeta`/`ClickEvent`/`HoverEvent` removals) — none of it
+  is touched by this plugin.
+- Compiles clean against the same `paper-api:1.21.11` floor — no reason to bump the compile
+  target.
+- Ran a real boots-clean runtime pass: a Paper 26.3 alpha build (build 8, ALPHA channel — no
+  stable build exists yet) under JDK 25, with the plugin installed. Enabled without errors;
+  performance-mode detection, message loading, bStats, and the update checker all fired
+  correctly. A full player-driven `/tpa` cycle and the bot suite still need a pass before this
+  is called fully "Tested" — see `CLAUDE.md` §4.
+- Folia has no 26.3 build yet ([Folia#507](https://github.com/PaperMC/Folia/issues/507), opened
+  2026-09-16, no timeline) — Folia 26.x support remains "N/A yet".
+
+---
+
 ## [1.6.1] - 2026-07-07
 
 ### 🔧 Folia Thread-Safety Hardening, Faster Startup, ~35% Smaller JAR

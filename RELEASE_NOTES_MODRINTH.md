@@ -1,3 +1,28 @@
+### Changelog v1.6.2
+
+**Minecraft 26.3 Compatibility:**
+- Verified YoTPA against the new Minecraft/Paper 26.3 ("Wilderness Bound") update
+- No code changes needed — YoTPA already worked on it, this release just confirms and documents that
+- Booted and tested on a real Paper 26.3 server (Java 25): the plugin loads cleanly, commands work, and nothing broke
+
+**Server Compatibility:**
+- **Fully Tested:** Paper 1.21.x – 26.2.x, Folia 1.21.x – 26.1.x, Purpur 1.21.x
+- **Early Access (verified, not yet full-tested):** Paper 26.3.x — Minecraft 26.3 is brand new and Paper only has experimental/alpha builds so far (no stable release yet); YoTPA boots and runs cleanly on them, but hasn't had the full automated test pass a "Fully Tested" version gets. Folia has no 26.3 build yet either.
+- **Should Work:** Pufferfish, and any Paper/Folia fork
+- **Requires:** Java 21+ (1.21.x servers) / Java 25+ (26.x servers)
+
+**Breaking Changes:**
+- None. Drop-in replacement for v1.6.1 — no config or message migration needed.
+
+**Migration from v1.6.1:**
+1. Stop your server
+2. Replace `YoTPA-1.6.1.jar` with `YoTPA-1.6.2.jar`
+3. Start your server — existing `config.yml` and `messages.yml` are fully preserved
+
+**Feedback & Ideas:** https://github.com/PhyschicWinter9/YoTPA/issues
+
+---
+
 ### Changelog v1.6.1
 
 **Folia Thread-Safety Fixes:**

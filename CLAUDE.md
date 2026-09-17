@@ -12,7 +12,7 @@ countdown, `/back` (return to pre-teleport or death location), cooldowns, full M
 i18n, an adaptive performance system, bStats analytics, and a GitHub-release update checker.
 
 - **Author**: PhyschicWinter9 & VIBEs Coding XD
-- **Current version**: 1.6.1 (single source of truth: `VersionConfig.PLUGIN_VERSION` in `build.gradle.kts`)
+- **Current version**: 1.6.2 (single source of truth: `VersionConfig.PLUGIN_VERSION` in `build.gradle.kts`)
 - **GitHub**: https://github.com/PhyschicWinter9/YoTPA · **Modrinth**: https://modrinth.com/plugin/yotpa
 - **bStats plugin ID**: 25926
 
@@ -23,7 +23,7 @@ i18n, an adaptive performance system, bStats analytics, and a GitHub-release upd
 | Layer | Technology | Notes |
 |---|---|---|
 | Language | Kotlin 2.3.0 | stdlib is shaded into the JAR (unrelocated) |
-| Platform API | `io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT`, `compileOnly` | one JAR serves 1.21.x → 26.2.x |
+| Platform API | `io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT`, `compileOnly` | one JAR serves 1.21.x → 26.3.x |
 | Java | Toolchain JDK 25, **bytecode target Java 21** (`jvmTarget=21`, `options.release=21`) | 21 bytecode runs on the Java 21 servers (1.21.x) *and* Java 25 servers (26.x) |
 | Text | Kyori Adventure + MiniMessage, `compileOnly` | **provided by Paper — never shade** (see Gotchas) |
 | Analytics | `org.bstats:bstats-bukkit:3.1.0`, `implementation`, relocated to `com.relaxlikes.yotpa.lib.bstats` | |
@@ -193,8 +193,9 @@ Rules that hold everywhere in this codebase:
 | Purpur 1.21.x | Assumed | claimed in release notes as tested historically; re-verify per release |
 | Paper 26.1.x | Assumed | July 2026 research: scheduler/PDC/Sound/`teleportAsync` APIs unchanged from 1.21.x (medium confidence — formal release notes were sparse) |
 | Paper 26.2.x | Assumed | same research basis; **no runtime pass recorded yet** |
+| Paper 26.3.x | **Partially tested** | September 2026: MC 26.3 ("Wilderness Bound") shipped 2026-09-15/16; Paper only has **experimental/alpha** builds so far (no stable numbered build, no papermc.io news post yet). API-surface grep found nothing this plugin touches affected by known 26.x changes (incl. the 26.2 Adventure-5 BookMeta/ClickEvent/HoverEvent removals); compiles clean, zero code changes, against the same 1.21.11 floor. **Boots-clean runtime pass done** 2026-09-17 — real Paper 26.3-8-alpha jar on JDK 25, plugin enables cleanly (performance-mode detection, messages, bStats, update check all fire with no errors/exceptions). **Not yet done:** a player-driven `/tpa` → accept → countdown → teleport → `/back` cycle and a bot-suite run — do those before calling this row "Tested" |
 | Folia 1.21.x | **Partially tested** | code paths designed for Folia and compile; the v1.6.1 countdown-start fix has **not** had a live Folia pass — do one before claiming "tested" |
-| Folia 26.x | N/A yet | Folia's newest public build was 26.1.2 as of July 2026; no Folia 26.2 exists to test |
+| Folia 26.x | N/A yet | Folia's newest public build was still 26.1.2 as of September 2026, with 26.2.x support in progress on a branch; a 26.3 support request ([Folia#507](https://github.com/PaperMC/Folia/issues/507)) was opened 2026-09-16 with no timeline. No Folia 26.2 or 26.3 build exists to test |
 | Spigot (non-Paper) | **Not supported** | uses Paper-only API (`teleportAsync`, entity schedulers, `pluginMeta`, `hasChangedPosition`) |
 
 Java: servers run 21+ (1.21.x) or 25 (26.x); the JAR is Java 21 bytecode and runs on both.
@@ -353,6 +354,9 @@ must exist for users to be notified, and its tag must be `v<semver>`.
   guard, name-cache poisoning fix, `/tpainfo` RAM math fix, dotted-sound-key normalisation,
   Adventure un-shaded (JAR 3.0 → 1.9 MB), bStats 3.1.0, `yotpa.admin` declared, `update.available`
   message key, `plugin.yml` version injected from the build.
+- **1.6.2** (2026-09-17) — Paper 26.3 ("Wilderness Bound") compatibility verification. No code
+  changes: API-surface audit found nothing affected, clean build against the same 1.21.11 floor,
+  and a real boots-clean runtime pass on a Paper 26.3 alpha build under JDK 25.
 
 ### Explicitly deferred (next up, in rough order)
 
@@ -449,8 +453,8 @@ would be a feature — follow the config-option checklist and extend `MessageMan
 
 ## 11. Version-upgrade playbook (new Minecraft/Paper release)
 
-Historical baseline: **1.21 → 26.1 → 26.2 required zero code changes** — the entire cost was
-research + runtime verification + docs. Expect that to continue but never assume it.
+Historical baseline: **1.21 → 26.1 → 26.2 → 26.3 required zero code changes** — the entire cost
+was research + runtime verification + docs. Expect that to continue but never assume it.
 
 1. **Research first** (do not trust model memory for post-cutoff versions): Paper release
    announcement + docs.papermc.io "update" notes; deprecations affecting the APIs this plugin

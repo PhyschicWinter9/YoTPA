@@ -16,12 +16,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
       # A manual workflow_dispatch run has no tag ref of its own — it runs
       # against whatever branch/tag the user picked in the Actions UI, which
       # defaults to the repo's default branch. Trusting github.ref_name there
       # silently treated "main" as a version once (`vmain` != PLUGIN_VERSION).
-      # Require an explicit, pre-existing tag input instead of guessing.
-      - name: Resolve target tag
+      # Require an explicit, pre-existing tag input instead of guessing, and
+      # verify the tag is actually present before trying to check it out —
+      # actions/checkout's own error for a missing ref is a raw, cryptic
+      # `git fetch` failure that gives no hint what to actually do about it.
+      - name: Resolve, verify, and check out target tag
         id: tag
         shell: bash
         run: |
@@ -36,11 +44,12 @@ jobs:
               exit 1
               ;;
           esac
+          if ! git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
+            echo "::error::Tag '$TAG' does not exist in this repo yet. Push it first: git tag $TAG && git push origin $TAG"
+            exit 1
+          fi
+          git checkout "refs/tags/$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.tag.outputs.tag }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
